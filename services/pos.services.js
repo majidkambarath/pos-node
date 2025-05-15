@@ -139,7 +139,6 @@ export const getAllEmployees = async () => {
     throw createAppError(`Error fetching employees: ${error.message}`, 500);
   }
 };
-// Helper function to get the maximum OrderNo
 const getMaxOrderId = async (transaction) => {
   const query = `SELECT ISNULL(MAX(OrderNo), 0) + 1 AS MaxId FROM tblOrder_M`;
   const result = await transaction.request().query(query);
@@ -179,7 +178,6 @@ export const processOrder = async ({
       firstItem: items?.[0] ? JSON.stringify(items[0]) : 'No items'
     });
     console.log(items)
-    // Data type validations and conversions
     orderNo = parseInt(orderNo) || 0;
     option = parseInt(option) || 0;
     custId = parseInt(custId) || 0;
@@ -187,27 +185,22 @@ export const processOrder = async ({
     tableId = parseInt(tableId) || 0;
     total = parseFloat(total) || 0;
     
-    // Check pool connection first
     if (!pool.connected) {
       await pool.connect();
     }
     
-    // Map option to order type
     const orderType =
       option === 1 ? "Order" : option === 2 ? "DineIn" : "TakeAway";
 
-    // Start SQL transaction - Create and begin explicitly
+    
     transaction = new sql.Transaction(pool);
     
-    // Important: Wait for transaction to begin before proceeding
     await transaction.begin();
     console.log("Transaction started successfully");
 
     if (status === "NEW") {
-      // Get new order number
       const newOrderNo = await getMaxOrderId(transaction);
       
-      // Insert into tblOrder_M
       const orderMasterQuery = `
         INSERT INTO tblOrder_M (EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status, Prefix, Pr)
         VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr);
@@ -236,11 +229,8 @@ export const processOrder = async ({
       );
       savedOrderNo = orderMasterResult.recordset[0].OrderNo;
 
-      // Insert order details into tblOrder_D
       for (const item of items) {
-        // Convert and validate item values
         const itemCode = parseInt(item.itemCode) || 0;
-        console.log(itemCode)
         const slNo = parseInt(item.slNo) || 0;
         const qty = parseFloat(item.qty) || 0;
         const rate = parseFloat(item.rate) || 0;
@@ -281,7 +271,6 @@ export const processOrder = async ({
         .query(`DELETE FROM tblPrinter WHERE OrderNo = @OrderNo`);
 
       for (const item of items) {
-        // Convert and validate item values
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
         const itemId = parseInt(item.itemCode) || 0;
@@ -317,7 +306,6 @@ export const processOrder = async ({
           UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
         `);
 
-      // Handle seat assignments for Dine-In
       if (option === 2) {
         const counterName = process.env.COUNTER_NAME || "DefaultCounter";
         const seatsQuery = `
@@ -354,7 +342,6 @@ export const processOrder = async ({
           .query(`DELETE FROM tblTemp_Seats WHERE Counter = @Counter`);
       }
 
-      // Update table status
       if (tableId && option === 2) {
         const seatCheckQuery = `
           SELECT * FROM tblSeat WHERE TableId = @TableId AND Status = 0
@@ -373,7 +360,6 @@ export const processOrder = async ({
           `);
       }
 
-      // Clear temp orders
       if (holdedOrder) {
         await transaction.request().input("OrderNo", sql.Int, holdedOrder)
           .query(`
