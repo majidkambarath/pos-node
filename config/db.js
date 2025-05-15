@@ -2,10 +2,10 @@ import sql from 'mssql';
 
 const config = {
   user: 'sa',
-  password: 'Aurify-bullions',
-  server: '0.tcp.in.ngrok.io',
+  password: 'password',
+  server: 'MAJID',
   database: 'RESTPOS',
-  port: 18866,
+  port: 1433,
   options: {
     encrypt: false,
     trustServerCertificate: true,
@@ -14,7 +14,6 @@ const config = {
   }
 };
 
-// Create a connection pool
 const pool = new sql.ConnectionPool(config);
 
 // Connect to the database
