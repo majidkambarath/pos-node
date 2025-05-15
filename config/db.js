@@ -5,7 +5,7 @@ const config = {
   password: 'Aurify-bullions',
   server: '0.tcp.in.ngrok.io',
   database: 'RESTPOS',
-  port: 10181,
+  port: 18866,
   options: {
     encrypt: false,
     trustServerCertificate: true,
