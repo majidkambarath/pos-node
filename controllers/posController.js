@@ -100,7 +100,7 @@ export const saveOrder = async (req, res, next) => {
       items, // Array of order details
       holdedOrder, // For clearing temp order
     } = req.body;
-
+    console.log(req.body);
     // Basic validations
     if (!orderNo || orderNo === "0") {
       return res.status(400).json({
@@ -116,7 +116,7 @@ export const saveOrder = async (req, res, next) => {
       });
     }
 
-    if (option === 2 && (!tableId || tableId === "0")) {
+    if (option === 2 && (!tableNo || tableNo === "0")) {
       return res.status(400).json({
         success: false,
         message: "Select a table for Dine-In.",
@@ -166,5 +166,28 @@ export const saveOrder = async (req, res, next) => {
     });
   } catch (error) {
     next(createAppError(`Saving failed: ${error.message}`, 500));
+  }
+};
+
+export const authLogin = async (req, res, next) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return next(createAppError("Username and password are required", 400));
+    }
+
+    const userData = await posServices.authenticateUser(username, password);
+
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      data: {
+        userId: userData.UserId,
+        userName: userData.User_Name,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 };

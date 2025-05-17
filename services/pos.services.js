@@ -113,6 +113,7 @@ export const getAllItems = async (options = {}) => {
     throw createAppError(`Error fetching items: ${error.message}`, 500);
   }
 };
+
 export const getAllCategories = async () => {
   try {
     await pool.connect();
@@ -125,6 +126,7 @@ export const getAllCategories = async () => {
     throw createAppError(`Error fetching categories: ${error.message}`, 500);
   }
 };
+
 export const getAllEmployees = async () => {
   try {
     await pool.connect();
@@ -175,32 +177,31 @@ export const processOrder = async ({
       option,
       tableId,
       itemsCount: items?.length || 0,
-      firstItem: items?.[0] ? JSON.stringify(items[0]) : 'No items'
+      firstItem: items?.[0] ? JSON.stringify(items[0]) : "No items",
     });
-    console.log(items)
+    console.log(items);
     orderNo = parseInt(orderNo) || 0;
     option = parseInt(option) || 0;
     custId = parseInt(custId) || 0;
     deliveryBoyId = parseInt(deliveryBoyId) || 0;
     tableId = parseInt(tableId) || 0;
     total = parseFloat(total) || 0;
-    
+
     if (!pool.connected) {
       await pool.connect();
     }
-    
+
     const orderType =
       option === 1 ? "Order" : option === 2 ? "DineIn" : "TakeAway";
 
-    
     transaction = new sql.Transaction(pool);
-    
+
     await transaction.begin();
     console.log("Transaction started successfully");
 
     if (status === "NEW") {
       const newOrderNo = await getMaxOrderId(transaction);
-      
+
       const orderMasterQuery = `
         INSERT INTO tblOrder_M (EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status, Prefix, Pr)
         VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr);
@@ -239,9 +240,13 @@ export const processOrder = async ({
         const vat = parseFloat(item.vat) || 0;
         const vatAmt = parseFloat(item.vatAmt) || 0;
         const taxLedger = parseInt(item.taxLedger) || 0;
-        
-        console.log(`Processing item: ${item.itemName}, ItemCode: ${itemCode}, Type: ${typeof itemCode}`);
-        
+
+        console.log(
+          `Processing item: ${
+            item.itemName
+          }, ItemCode: ${itemCode}, Type: ${typeof itemCode}`
+        );
+
         const orderDetailQuery = `
           INSERT INTO tblOrder_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic, Notes)
           VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic, @Notes)
@@ -274,9 +279,11 @@ export const processOrder = async ({
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
         const itemId = parseInt(item.itemCode) || 0;
-        
-        console.log(`Processing printer for item: ${item.itemName}, ItemCode: ${itemCode}`);
-        
+
+        console.log(
+          `Processing printer for item: ${item.itemName}, ItemCode: ${itemCode}`
+        );
+
         const printerQuery = `
           SELECT PrinteName FROM tblItemMaster WHERE ItemId = @ItemId
         `;
@@ -370,7 +377,6 @@ export const processOrder = async ({
 
       // TODO: Implement printing logic (replace CRYSTAL_PRINT)
       // Example: await printService.printOrder(savedOrderNo);
-
     } else if (status === "KOT") {
       // Handle KOT logic
       // Update tblOrder_M
@@ -425,9 +431,11 @@ export const processOrder = async ({
         const vat = parseFloat(item.vat) || 0;
         const vatAmt = parseFloat(item.vatAmt) || 0;
         const taxLedger = parseInt(item.taxLedger) || 0;
-        
-        console.log(`Processing KOT item: ${item.itemName}, ItemCode: ${itemCode}`);
-        
+
+        console.log(
+          `Processing KOT item: ${item.itemName}, ItemCode: ${itemCode}`
+        );
+
         const kotDetailQuery = `
           INSERT INTO tblKot_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic)
           VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic)
@@ -465,9 +473,11 @@ export const processOrder = async ({
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
         const itemId = parseInt(item.itemCode) || 0;
-        
-        console.log(`Processing KOT printer for item: ${item.itemName}, ItemCode: ${itemCode}`);
-        
+
+        console.log(
+          `Processing KOT printer for item: ${item.itemName}, ItemCode: ${itemCode}`
+        );
+
         const printerQuery = `
           SELECT PrinteName FROM tblItemMaster WHERE ItemId = @ItemId
         `;
@@ -508,9 +518,12 @@ export const processOrder = async ({
     await transaction.commit();
     console.log("Transaction committed successfully");
 
-    return { 
-      orderNo: savedOrderNo, 
-      message: status === "NEW" ? "Order saved successfully" : "KOT added successfully" 
+    return {
+      orderNo: savedOrderNo,
+      message:
+        status === "NEW"
+          ? "Order saved successfully"
+          : "KOT added successfully",
     };
   } catch (error) {
     console.error("Transaction error:", error.message);
@@ -528,23 +541,22 @@ export const processOrder = async ({
   }
 };
 
-
 export const latestOrder = async () => {
   let transaction;
   try {
     // Connect to the database
     await pool.connect();
-    
+
     // Create a transaction
     transaction = new sql.Transaction(pool);
     await transaction.begin();
-    
+
     // Fetch the next order number
     const nextOrderNo = await getMaxOrderId(transaction);
-    
+
     // Commit the transaction
     await transaction.commit();
-    
+
     // Return the order number as an object to match frontend expectation
     return { orderNo: String(nextOrderNo) };
   } catch (error) {
@@ -553,16 +565,48 @@ export const latestOrder = async () => {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        console.error('Rollback error:', rollbackError);
+        console.error("Rollback error:", rollbackError);
       }
     }
-    throw createAppError(`Error fetching latest order number: ${error.message}`, 500);
+    throw createAppError(
+      `Error fetching latest order number: ${error.message}`,
+      500
+    );
   } finally {
     // Release the connection
     try {
       await pool.close();
     } catch (closeError) {
-      console.error('Error closing pool:', closeError);
+      console.error("Error closing pool:", closeError);
     }
+  }
+};
+
+export const authenticateUser = async (userName, password) => {
+  try {
+    await pool.connect();
+
+    const query = `
+      SELECT UserId, User_Name 
+      FROM dbo.tblUser 
+      WHERE User_Name = @userName AND Password = @password
+    `;
+
+    const result = await pool
+      .request()
+      .input("userName", userName)
+      .input("password", password)
+      .query(query);
+
+    if (result.recordset.length === 0) {
+      throw createAppError("Invalid username or password", 401);
+    }
+
+    return result.recordset[0];
+  } catch (error) {
+    if (error.statusCode) {
+      throw error;
+    }
+    throw createAppError(`Authentication error: ${error.message}`, 500);
   }
 };
