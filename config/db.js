@@ -1,12 +1,35 @@
 import sql from "mssql";
 import dotenv from "dotenv";
 
-// Load environment variables from .env file
 dotenv.config();
+
+const decryptSecret = (encrypted, salt = "POS_SYSTEM") => {
+  try {
+    const saltChars = salt.split("").map((char) => char.charCodeAt(0));
+    const hexPairs = [];
+    for (let i = 0; i < encrypted.length; i += 2) {
+      if (i + 1 < encrypted.length) {
+        hexPairs.push(encrypted.substring(i, i + 2));
+      }
+    }
+    const decrypted = hexPairs.map((hex, index) => {
+      const charCode = parseInt(hex, 16);
+      const saltChar = saltChars[index % saltChars.length];
+      return String.fromCharCode(charCode ^ saltChar);
+    });
+
+    return decrypted.join("");
+  } catch (error) {
+    console.error("Decryption error:", error);
+    return "";
+  }
+};
+const encryptedPassword = process.env.DB_PASSWORD;
+const decryptedPassword = decryptSecret(encryptedPassword);
 
 const config = {
   user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  password: decryptedPassword,
   server: process.env.DB_SERVER,
   database: process.env.DB_NAME,
   port: parseInt(process.env.DB_PORT || "1433"),
@@ -21,7 +44,6 @@ const config = {
 
 const pool = new sql.ConnectionPool(config);
 
-// Connect to the database
 const poolConnect = pool
   .connect()
   .then(() => {
