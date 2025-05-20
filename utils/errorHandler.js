@@ -1,11 +1,11 @@
-export const createAppError = (message, statusCode) => {
+exports.createAppError = (message, statusCode) => {
   const error = new Error(message);
   error.statusCode = statusCode;
   error.isOperational = true;
   return error;
 };
 
-export const errorHandler = (err, req, res, next) => {
+exports.errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || "Internal Server Error";
 

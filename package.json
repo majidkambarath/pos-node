@@ -1,13 +1,13 @@
 {
   "name": "pos_backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "POS Backend Application",
   "main": "app.js",
-  "type": "module",
   "bin": "app.js",
   "scripts": {
     "start": "nodemon app.js",
-    "build": "pkg . --target node16-win-x64 --no-bytecode --output dist/pos_backend.exe"
+    "dev": "nodemon app.js",
+    "build": "pkg ."
   },
   "keywords": [],
   "author": "",
@@ -15,10 +15,41 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
-    "expres": "^0.0.5",
     "express": "^5.1.0",
     "msnodesqlv8": "^4.5.0",
-    "mssql": "^11.0.1",
-    "nodemon": "^3.1.10"
+    "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10",
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist",
+    "assets": [
+      "node_modules/**/*",
+      "config/**/*",
+      "public/**/*",
+      ".env"
+    ],
+    "scripts": [
+      "app.js",
+      "config/**/*.js",
+      "controllers/**/*.js",
+      "routers/**/*.js",
+      "services/**/*.js",
+      "utils/**/*.js"
+    ],
+    "ignores": [
+      "node_modules/open/**",
+      "node_modules/default-browser/**",
+      "node_modules/define-lazy-prop/**",
+      "node_modules/is-inside-container/**",
+      "node_modules/is-wsl/**",
+      "node_modules/bundle-name/**",
+      "node_modules/default-browser-id/**",
+      "node_modules/is-docker/**",
+      "node_modules/run-applescript/**"
+    ]
   }
 }

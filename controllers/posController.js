@@ -1,10 +1,9 @@
-import { createAppError } from "../utils/errorHandler.js";
-import * as posServices from "../services/pos.services.js";
+const { createAppError } = require("../utils/errorHandler");
+const posServices = require("../services/pos.services");
 
-export const getTableSeats = async (req, res, next) => {
+const getTableSeats = async (req, res, next) => {
   try {
     const tableSeats = await posServices.getTableSeatsData();
-
     res.status(200).json({
       success: true,
       message: "Table seats fetched successfully",
@@ -15,10 +14,9 @@ export const getTableSeats = async (req, res, next) => {
   }
 };
 
-export const getAllItems = async (req, res, next) => {
+const getAllItems = async (req, res, next) => {
   try {
     const { search, limit, offset, grpId } = req.query;
-
     const items = await posServices.getAllItems({
       search,
       grpId: grpId ? parseInt(grpId) : undefined,
@@ -37,10 +35,9 @@ export const getAllItems = async (req, res, next) => {
   }
 };
 
-export const getAllCategories = async (req, res, next) => {
+const getAllCategories = async (req, res, next) => {
   try {
     const categories = await posServices.getAllCategories();
-
     res.status(200).json({
       success: true,
       message: "Categories fetched successfully",
@@ -51,10 +48,10 @@ export const getAllCategories = async (req, res, next) => {
     next(error);
   }
 };
-export const getAllEmployees = async (req, res, next) => {
+
+const getAllEmployees = async (req, res, next) => {
   try {
     const employees = await posServices.getAllEmployees();
-
     res.status(200).json({
       success: true,
       message: "Employees fetched successfully",
@@ -65,27 +62,28 @@ export const getAllEmployees = async (req, res, next) => {
     next(error);
   }
 };
-export const latestOrder = async (req, res, next) => {
+
+const latestOrder = async (req, res, next) => {
   try {
     const latest = await posServices.latestOrder();
-
     res.status(200).json({
       success: true,
-      message: "latestOrder fetched successfully",
+      message: "Latest order fetched successfully",
       data: latest,
     });
   } catch (error) {
     next(error);
   }
 };
-export const saveOrder = async (req, res, next) => {
+
+const saveOrder = async (req, res, next) => {
   try {
     const {
       orderNo,
-      status, // 'NEW' or 'KOT'
+      status,
       date,
       time,
-      option, // 1: Delivery, 2: DineIn, 3: TakeAway
+      option,
       custId,
       custName,
       flatNo,
@@ -97,11 +95,10 @@ export const saveOrder = async (req, res, next) => {
       remarks,
       total,
       prefix,
-      items, // Array of order details
-      holdedOrder, // For clearing temp order
+      items,
+      holdedOrder,
     } = req.body;
-    console.log(req.body);
-    // Basic validations
+
     if (!orderNo || orderNo === "0") {
       return res.status(400).json({
         success: false,
@@ -137,7 +134,6 @@ export const saveOrder = async (req, res, next) => {
       });
     }
 
-    // Call service to process the order
     const result = await posServices.processOrder({
       orderNo,
       status,
@@ -169,7 +165,7 @@ export const saveOrder = async (req, res, next) => {
   }
 };
 
-export const authLogin = async (req, res, next) => {
+const authLogin = async (req, res, next) => {
   try {
     const { username, password } = req.body;
 
@@ -190,4 +186,14 @@ export const authLogin = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+module.exports = {
+  getTableSeats,
+  getAllItems,
+  getAllCategories,
+  getAllEmployees,
+  latestOrder,
+  saveOrder,
+  authLogin,
 };

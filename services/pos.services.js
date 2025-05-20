@@ -1,7 +1,12 @@
-import { pool, sql } from "../config/db.js";
-import { createAppError } from "../utils/errorHandler.js";
+const sql = require('mssql');
+const { pool } = require("../config/db");
+const { createAppError } = require("../utils/errorHandler");
 
-export const getTableSeatsData = async () => {
+/**
+ * Fetches tables and their associated seats
+ * @returns {Array} Array of table objects with nested seats
+ */
+const getTableSeatsData = async () => {
   try {
     await pool.connect();
 
@@ -55,7 +60,12 @@ export const getTableSeatsData = async () => {
   }
 };
 
-export const getAllItems = async (options = {}) => {
+/**
+ * Gets all items with optional filtering
+ * @param {Object} options - Filter options (search, grpId, limit, offset)
+ * @returns {Array} Array of items
+ */
+const getAllItems = async (options = {}) => {
   try {
     await pool.connect();
 
@@ -114,7 +124,11 @@ export const getAllItems = async (options = {}) => {
   }
 };
 
-export const getAllCategories = async () => {
+/**
+ * Gets all categories
+ * @returns {Array} Array of category objects
+ */
+const getAllCategories = async () => {
   try {
     await pool.connect();
 
@@ -127,13 +141,15 @@ export const getAllCategories = async () => {
   }
 };
 
-export const getAllEmployees = async () => {
+/**
+ * Gets all active employees
+ * @returns {Array} Array of employee objects
+ */
+const getAllEmployees = async () => {
   try {
     await pool.connect();
 
-    // This is the equivalent SQL query from your VB script
-    const query =
-      "SELECT Code, EmpName FROM dbo.tblEmployee WHERE Active=1 ORDER BY EmpName";
+    const query = "SELECT Code, EmpName FROM dbo.tblEmployee WHERE Active=1 ORDER BY EmpName";
     const result = await pool.request().query(query);
 
     return result.recordset;
@@ -141,13 +157,24 @@ export const getAllEmployees = async () => {
     throw createAppError(`Error fetching employees: ${error.message}`, 500);
   }
 };
+
+/**
+ * Gets the next available order ID
+ * @param {Object} transaction - SQL transaction object
+ * @returns {Number} Next order ID
+ */
 const getMaxOrderId = async (transaction) => {
   const query = `SELECT ISNULL(MAX(OrderNo), 0) + 1 AS MaxId FROM tblOrder_M`;
   const result = await transaction.request().query(query);
   return result.recordset[0].MaxId;
 };
 
-export const processOrder = async ({
+/**
+ * Process an order (new or KOT)
+ * @param {Object} orderData - Order details and items
+ * @returns {Object} Result with order number and status message
+ */
+const processOrder = async ({
   orderNo,
   status,
   date,
@@ -179,7 +206,8 @@ export const processOrder = async ({
       itemsCount: items?.length || 0,
       firstItem: items?.[0] ? JSON.stringify(items[0]) : "No items",
     });
-    console.log(items);
+    
+    // Parse numeric values
     orderNo = parseInt(orderNo) || 0;
     option = parseInt(option) || 0;
     custId = parseInt(custId) || 0;
@@ -191,25 +219,24 @@ export const processOrder = async ({
       await pool.connect();
     }
 
-    const orderType =
-      option === 1 ? "Order" : option === 2 ? "DineIn" : "TakeAway";
+    const orderType = option === 1 ? "Order" : option === 2 ? "DineIn" : "TakeAway";
 
     transaction = new sql.Transaction(pool);
-
     await transaction.begin();
     console.log("Transaction started successfully");
 
     if (status === "NEW") {
       const newOrderNo = await getMaxOrderId(transaction);
 
+      // Insert order master
       const orderMasterQuery = `
         INSERT INTO tblOrder_M (EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status, Prefix, Pr)
         VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr);
         SELECT SCOPE_IDENTITY() AS OrderNo;
       `;
-      const orderMasterRequest = transaction
-        .request()
-        .input("EDate", sql.VarChar, date) // Format: 'DD-MMM-YYYY'
+      
+      const orderMasterRequest = transaction.request()
+        .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
         .input("Options", sql.Int, option)
         .input("CustId", sql.Int, custId || 0)
@@ -225,11 +252,11 @@ export const processOrder = async ({
         .input("Status", sql.VarChar, orderType)
         .input("Prefix", sql.VarChar, prefix || "")
         .input("Pr", sql.VarChar, prefix ? `${prefix}${newOrderNo}` : "");
-      const orderMasterResult = await orderMasterRequest.query(
-        orderMasterQuery
-      );
+      
+      const orderMasterResult = await orderMasterRequest.query(orderMasterQuery);
       savedOrderNo = orderMasterResult.recordset[0].OrderNo;
 
+      // Process order items
       for (const item of items) {
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
@@ -241,18 +268,14 @@ export const processOrder = async ({
         const vatAmt = parseFloat(item.vatAmt) || 0;
         const taxLedger = parseInt(item.taxLedger) || 0;
 
-        console.log(
-          `Processing item: ${
-            item.itemName
-          }, ItemCode: ${itemCode}, Type: ${typeof itemCode}`
-        );
+        console.log(`Processing item: ${item.itemName}, ItemCode: ${itemCode}, Type: ${typeof itemCode}`);
 
         const orderDetailQuery = `
           INSERT INTO tblOrder_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic, Notes)
           VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic, @Notes)
         `;
-        await transaction
-          .request()
+        
+        await transaction.request()
           .input("OrderNo", sql.Int, savedOrderNo)
           .input("SlNo", sql.Int, slNo)
           .input("ItemCode", sql.Int, itemCode)
@@ -269,9 +292,8 @@ export const processOrder = async ({
           .query(orderDetailQuery);
       }
 
-      // Handle printer assignmentse
-      await transaction
-        .request()
+      // Handle printer assignments
+      await transaction.request()
         .input("OrderNo", sql.Int, savedOrderNo)
         .query(`DELETE FROM tblPrinter WHERE OrderNo = @OrderNo`);
 
@@ -280,25 +302,24 @@ export const processOrder = async ({
         const slNo = parseInt(item.slNo) || 0;
         const itemId = parseInt(item.itemCode) || 0;
 
-        console.log(
-          `Processing printer for item: ${item.itemName}, ItemCode: ${itemCode}`
-        );
+        console.log(`Processing printer for item: ${item.itemName}, ItemCode: ${itemCode}`);
 
         const printerQuery = `
           SELECT PrinteName FROM tblItemMaster WHERE ItemId = @ItemId
         `;
-        const printerResult = await transaction
-          .request()
+        
+        const printerResult = await transaction.request()
           .input("ItemId", sql.Int, itemId)
           .query(printerQuery);
+        
         const printerName = printerResult.recordset[0]?.PrinteName || "";
 
-        await transaction
-          .request()
+        await transaction.request()
           .input("OrderNo", sql.Int, savedOrderNo)
           .input("SlNo", sql.Int, slNo)
           .input("ItemId", sql.Int, itemId)
-          .input("Printer", sql.VarChar, printerName).query(`
+          .input("Printer", sql.VarChar, printerName)
+          .query(`
             INSERT INTO tblPrinter (OrderNo, SlNo, ItemId, Printer)
             VALUES (@OrderNo, @SlNo, @ItemId, @Printer)
           `);
@@ -306,102 +327,104 @@ export const processOrder = async ({
 
       // Update printer for empty printer names
       const orderPrinter = process.env.ORDER_PRINTER || "DefaultPrinter";
-      await transaction
-        .request()
+      await transaction.request()
         .input("OrderNo", sql.Int, savedOrderNo)
-        .input("Printer", sql.VarChar, orderPrinter).query(`
+        .input("Printer", sql.VarChar, orderPrinter)
+        .query(`
           UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
         `);
 
+      // Handle dine-in specific logic
       if (option === 2) {
         const counterName = process.env.COUNTER_NAME || "DefaultCounter";
         const seatsQuery = `
           SELECT Seat, SeatId, TableId, Status, Counter FROM tblTemp_Seats WHERE Counter = @Counter
         `;
-        const seatsResult = await transaction
-          .request()
+        
+        const seatsResult = await transaction.request()
           .input("Counter", sql.VarChar, counterName)
           .query(seatsQuery);
 
         for (const seat of seatsResult.recordset) {
-          await transaction
-            .request()
+          await transaction.request()
             .input("OrderNo", sql.Int, savedOrderNo)
             .input("Seat", sql.VarChar, seat.Seat)
             .input("SeatId", sql.Int, seat.SeatId)
             .input("TableId", sql.Int, seat.TableId)
-            .input("Counter", sql.VarChar, counterName).query(`
+            .input("Counter", sql.VarChar, counterName)
+            .query(`
               INSERT INTO tblOrder_Seats (OrderNo, Seat, SeatId, TableId, Status, Counter)
               VALUES (@OrderNo, @Seat, @SeatId, @TableId, 0, @Counter)
             `);
 
-          await transaction
-            .request()
+          await transaction.request()
             .input("SeatId", sql.Int, seat.SeatId)
-            .input("TableId", sql.Int, seat.TableId).query(`
+            .input("TableId", sql.Int, seat.TableId)
+            .query(`
               UPDATE tblSeat SET Status = 1 WHERE SeatId = @SeatId AND TableId = @TableId
             `);
         }
 
-        await transaction
-          .request()
+        await transaction.request()
           .input("Counter", sql.VarChar, counterName)
           .query(`DELETE FROM tblTemp_Seats WHERE Counter = @Counter`);
       }
 
+      // Update table status for dine-in
       if (tableId && option === 2) {
         const seatCheckQuery = `
           SELECT * FROM tblSeat WHERE TableId = @TableId AND Status = 0
         `;
-        const seatCheckResult = await transaction
-          .request()
+        
+        const seatCheckResult = await transaction.request()
           .input("TableId", sql.Int, tableId)
           .query(seatCheckQuery);
 
         const tableStatus = seatCheckResult.recordset.length > 0 ? 1 : 2;
-        await transaction
-          .request()
+        await transaction.request()
           .input("TableId", sql.Int, tableId)
-          .input("Status", sql.Int, tableStatus).query(`
+          .input("Status", sql.Int, tableStatus)
+          .query(`
             UPDATE tblTable SET Status = @Status WHERE TableId = @TableId
           `);
       }
 
+      // Clean up holded order if needed
       if (holdedOrder) {
-        await transaction.request().input("OrderNo", sql.Int, holdedOrder)
+        await transaction.request()
+          .input("OrderNo", sql.Int, holdedOrder)
           .query(`
             DELETE FROM tblTempOrder_M WHERE OrderNo = @OrderNo;
             DELETE FROM tblTempOrder_D WHERE OrderNo = @OrderNo;
           `);
       }
 
-      // TODO: Implement printing logic (replace CRYSTAL_PRINT)
-      // Example: await printService.printOrder(savedOrderNo);
     } else if (status === "KOT") {
-      // Handle KOT logic
-      // Update tblOrder_M
-      await transaction
-        .request()
+      // Update table info in order master
+      await transaction.request()
         .input("TableId", sql.Int, tableId || 0)
         .input("TableNo", sql.VarChar, tableNo || "")
-        .input("OrderNo", sql.Int, orderNo).query(`
+        .input("OrderNo", sql.Int, orderNo)
+        .query(`
           UPDATE tblOrder_M SET TableId = @TableId, TableNo = @TableNo WHERE OrderNo = @OrderNo
         `);
 
       // Update table status
       if (tableId) {
-        await transaction.request().input("TableId", sql.Int, tableId).query(`
+        await transaction.request()
+          .input("TableId", sql.Int, tableId)
+          .query(`
             UPDATE tblTable SET Status = 1 WHERE TableId = @TableId
           `);
       }
 
-      // Insert into tblKot_M
+      // Insert KOT master record
       const kotMasterQuery = `
         INSERT INTO tblKot_M (OrderNo, EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status)
         VALUES (@OrderNo, @EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status)
       `;
-      await transaction
-        .request()
+      
+      await transaction.request()
         .input("OrderNo", sql.Int, orderNo)
         .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
@@ -419,9 +442,8 @@ export const processOrder = async ({
         .input("Status", sql.VarChar, orderType)
         .query(kotMasterQuery);
 
-      // Insert into tblKot_D and tblOrder_D
+      // Process KOT and order detail items
       for (const item of items) {
-        // Convert and validate item values
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
         const qty = parseFloat(item.qty) || 0;
@@ -432,20 +454,19 @@ export const processOrder = async ({
         const vatAmt = parseFloat(item.vatAmt) || 0;
         const taxLedger = parseInt(item.taxLedger) || 0;
 
-        console.log(
-          `Processing KOT item: ${item.itemName}, ItemCode: ${itemCode}`
-        );
+        console.log(`Processing KOT item: ${item.itemName}, ItemCode: ${itemCode}`);
 
         const kotDetailQuery = `
           INSERT INTO tblKot_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic)
           VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic)
         `;
+        
         const orderDetailQuery = `
           INSERT INTO tblOrder_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic)
           VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic)
         `;
-        const request = transaction
-          .request()
+        
+        const request = transaction.request()
           .input("OrderNo", sql.Int, orderNo)
           .input("SlNo", sql.Int, slNo)
           .input("ItemCode", sql.Int, itemCode)
@@ -458,41 +479,39 @@ export const processOrder = async ({
           .input("VatAmt", sql.Decimal(18, 2), vatAmt)
           .input("TaxLedger", sql.Int, taxLedger)
           .input("Arabic", sql.NVarChar, item.arabic || "");
+        
         await request.query(kotDetailQuery);
         await request.query(orderDetailQuery);
       }
 
-      // Handle printer assignments
-      await transaction
-        .request()
+      // Handle printer assignments for KOT
+      await transaction.request()
         .input("OrderNo", sql.Int, orderNo)
         .query(`DELETE FROM tblPrinter WHERE OrderNo = @OrderNo`);
 
       for (const item of items) {
-        // Convert and validate item values
         const itemCode = parseInt(item.itemCode) || 0;
         const slNo = parseInt(item.slNo) || 0;
         const itemId = parseInt(item.itemCode) || 0;
 
-        console.log(
-          `Processing KOT printer for item: ${item.itemName}, ItemCode: ${itemCode}`
-        );
+        console.log(`Processing KOT printer for item: ${item.itemName}, ItemCode: ${itemCode}`);
 
         const printerQuery = `
           SELECT PrinteName FROM tblItemMaster WHERE ItemId = @ItemId
         `;
-        const printerResult = await transaction
-          .request()
+        
+        const printerResult = await transaction.request()
           .input("ItemId", sql.Int, itemId)
           .query(printerQuery);
+        
         const printerName = printerResult.recordset[0]?.PrinteName || "";
 
-        await transaction
-          .request()
+        await transaction.request()
           .input("OrderNo", sql.Int, orderNo)
           .input("SlNo", sql.Int, slNo)
           .input("ItemId", sql.Int, itemId)
-          .input("Printer", sql.VarChar, printerName).query(`
+          .input("Printer", sql.VarChar, printerName)
+          .query(`
             INSERT INTO tblPrinter (OrderNo, SlNo, ItemId, Printer)
             VALUES (@OrderNo, @SlNo, @ItemId, @Printer)
           `);
@@ -500,33 +519,29 @@ export const processOrder = async ({
 
       // Update printer for empty printer names
       const orderPrinter = process.env.ORDER_PRINTER || "DefaultPrinter";
-      await transaction
-        .request()
+      await transaction.request()
         .input("OrderNo", sql.Int, orderNo)
-        .input("Printer", sql.VarChar, orderPrinter).query(`
+        .input("Printer", sql.VarChar, orderPrinter)
+        .query(`
           UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
         `);
 
-      // TODO: Implement printing logic (replace CRYSTAL_PRINT)
-      // Example: await printService.printOrder(orderNo);
     } else {
       throw createAppError("Invalid status. Must be NEW or KOT.", 400);
     }
 
-    // Explicitly commit the transaction
+    // Commit the transaction
     console.log("Committing transaction...");
     await transaction.commit();
     console.log("Transaction committed successfully");
 
     return {
       orderNo: savedOrderNo,
-      message:
-        status === "NEW"
-          ? "Order saved successfully"
-          : "KOT added successfully",
+      message: status === "NEW" ? "Order saved successfully" : "KOT added successfully",
     };
   } catch (error) {
     console.error("Transaction error:", error.message);
+    
     // Handle transaction rollback
     if (transaction) {
       try {
@@ -537,12 +552,19 @@ export const processOrder = async ({
         console.error("Transaction rollback failed:", rollbackError.message);
       }
     }
+    
     throw error;
   }
 };
 
-export const latestOrder = async () => {
+/**
+ * Gets the latest order number
+ * @returns {Object} Object with next order number
+ */
+const latestOrder = async () => {
+  const sql = require('mssql'); // Import sql module directly in this function
   let transaction;
+  
   try {
     // Connect to the database
     await pool.connect();
@@ -568,21 +590,26 @@ export const latestOrder = async () => {
         console.error("Rollback error:", rollbackError);
       }
     }
-    throw createAppError(
-      `Error fetching latest order number: ${error.message}`,
-      500
-    );
+    throw createAppError(`Error fetching latest order number: ${error.message}`, 500);
   } finally {
     // Release the connection
     try {
-      await pool.close();
+      if (pool.connected) {
+        await pool.close();
+      }
     } catch (closeError) {
       console.error("Error closing pool:", closeError);
     }
   }
 };
 
-export const authenticateUser = async (userName, password) => {
+/**
+ * Authenticates a user
+ * @param {String} userName - Username
+ * @param {String} password - Password
+ * @returns {Object} User information if authenticated
+ */
+const authenticateUser = async (userName, password) => {
   try {
     await pool.connect();
 
@@ -592,8 +619,7 @@ export const authenticateUser = async (userName, password) => {
       WHERE User_Name = @userName AND Password = @password
     `;
 
-    const result = await pool
-      .request()
+    const result = await pool.request()
       .input("userName", userName)
       .input("password", password)
       .query(query);
@@ -609,4 +635,14 @@ export const authenticateUser = async (userName, password) => {
     }
     throw createAppError(`Authentication error: ${error.message}`, 500);
   }
+};
+
+module.exports = {
+  getTableSeatsData,
+  getAllItems,
+  getAllCategories,
+  getAllEmployees,
+  processOrder,
+  latestOrder,
+  authenticateUser
 };

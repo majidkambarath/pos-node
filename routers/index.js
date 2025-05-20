@@ -1,5 +1,5 @@
-import express from "express";
-import {
+const express = require("express");
+const {
   getAllItems,
   getTableSeats,
   getAllCategories,
@@ -7,7 +7,7 @@ import {
   saveOrder,
   latestOrder,
   authLogin
-} from "../controllers/posController.js";
+} = require("../controllers/posController.js");
 
 const router = express.Router();
 
@@ -17,5 +17,6 @@ router.get("/categories", getAllCategories);
 router.get("/employees", getAllEmployees);
 router.post("/orders", saveOrder);
 router.get("/order/latest", latestOrder);
-router.post('/login',authLogin);
-export default router;
+router.post("/login", authLogin);
+
+module.exports = router;

@@ -1,44 +1,53 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-dotenv.config();
-import { pool } from "./config/db.js";
-import router from "./routers/index.js";
-import { errorHandler } from "./utils/errorHandler.js";
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const path = require("path");
+const { pool } = require("./config/db");
+const router = require("./routers");
+const { errorHandler } = require("./utils/errorHandler");
+
+dotenv.config({ path: path.join(__dirname, '.env') });
+
 const app = express();
 const port = process.env.PORT || 4444;
 
-app.use(express.static("public"));
-app.use(express.json({ limit: "50mb" })); // Increase JSON payload limit
-app.use(express.urlencoded({ limit: "50mb", extended: true })); // Increase URL-encoded payload limit
+app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-const testConnection = async () => {
+// Initialize database connection
+const initializeDatabase = async () => {
   try {
     await pool.connect();
-    console.log("Connection succeeded!");
-    pool.close();
+    console.log("Database connection established successfully!");
+    // Don't close the connection - keep it open for the app's lifecycle
   } catch (err) {
-    console.error("Connection failed:", err);
+    console.error("Database connection failed:", err);
+    process.exit(1); // Exit if DB connection fails
   }
 };
 
-testConnection();
+initializeDatabase();
 
-// CORS configuration
 app.use(
   cors({
-    origin: (origin, callback) => {
-      callback(null, true); // Allow any origin
-    },
+    origin: (origin, callback) => callback(null, true),
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   })
 );
-app.use("/api", router);
 
+app.use("/api", router);
 app.use(errorHandler);
 
 app.listen(port, () => {
-  console.log("server running !!!!!");
+  console.log("Server running successfully!");
   console.log(`http://localhost:${port}`);
+});
+
+// Handle application shutdown
+process.on('SIGINT', async () => {
+  console.log('Shutting down server...');
+  await pool.close();
+  process.exit(0);
 });
