@@ -151,11 +151,27 @@ if (!process.env.DB_NAME) {
   console.error("ERROR: DB_NAME environment variable is not defined");
 }
 
+// Fix server name - handle SQL Server instance names properly
+let serverName = process.env.DB_SERVER || "";
+console.log('Original server name from env:', serverName);
+
+// If it's a named instance (contains backslash), format it properly
+if (serverName.includes('\\')) {
+  // For named instances, we need to use the full server\instance format
+  console.log('Detected SQL Server named instance:', serverName);
+} else if (serverName.includes('/')) {
+  // Handle forward slash notation and convert to backslash
+  serverName = serverName.replace('/', '\\');
+  console.log('Converted forward slash to backslash:', serverName);
+}
+
+console.log('Final server name for connection:', serverName);
+
 // Create database configuration
 const config = {
   user: process.env.DB_USER || "",
   password: decryptedPassword,
-  server: process.env.DB_SERVER || "",
+  server: serverName,
   database: process.env.DB_NAME || "",
   port: parseInt(process.env.DB_PORT || "1433"),
   options: {
@@ -163,8 +179,27 @@ const config = {
     trustServerCertificate: process.env.DB_TRUST_CERT === "true",
     enableArithAbort: true,
     integratedSecurity: process.env.DB_INTEGRATED_SECURITY === "true",
+    // Add instanceName for named instances
+    instanceName: serverName.includes('\\') ? serverName.split('\\')[1] : undefined,
   },
 };
+
+// For named instances, we might need to use just the server name without instance in the server field
+if (serverName.includes('\\')) {
+  const parts = serverName.split('\\');
+  config.server = parts[0]; // Just the server name
+  config.options.instanceName = parts[1]; // The instance name
+  console.log('Using server:', config.server, 'with instance:', config.options.instanceName);
+}
+
+console.log('Database configuration:', {
+  server: config.server,
+  database: config.database,
+  user: config.user,
+  port: config.port,
+  instanceName: config.options.instanceName,
+  integratedSecurity: config.options.integratedSecurity
+});
 
 // Only attempt to connect if we have the required parameters
 const connectToDatabase = async () => {
@@ -177,11 +212,73 @@ const connectToDatabase = async () => {
 
   const pool = new sql.ConnectionPool(config);
   try {
+    console.log('Attempting to connect to database...');
     await pool.connect();
     console.log("Connected to MSSQL database successfully");
     return pool;
   } catch (err) {
     console.error("Database connection failed:", err);
+    
+    // Try alternative connection approaches for SQL Server Express
+    if (err.code === 'EINSTLOOKUP' || err.code === 'ENOTFOUND') {
+      console.log('Trying alternative connection methods for SQL Server Express...');
+      
+      // Try with localhost instead of machine name
+      const alternativeConfigs = [
+        {
+          ...config,
+          server: 'localhost',
+          options: {
+            ...config.options,
+            instanceName: 'SQLEXPRESS'
+          }
+        },
+        {
+          ...config,
+          server: '127.0.0.1',
+          options: {
+            ...config.options,
+            instanceName: 'SQLEXPRESS'
+          }
+        },
+        {
+          ...config,
+          server: 'localhost\\SQLEXPRESS',
+          options: {
+            ...config.options,
+            instanceName: undefined
+          }
+        },
+        {
+          ...config,
+          server: '(local)\\SQLEXPRESS',
+          options: {
+            ...config.options,
+            instanceName: undefined
+          }
+        }
+      ];
+      
+      for (const altConfig of alternativeConfigs) {
+        try {
+          console.log(`Trying alternative config: server=${altConfig.server}, instance=${altConfig.options.instanceName || 'none'}`);
+          const altPool = new sql.ConnectionPool(altConfig);
+          await altPool.connect();
+          console.log("✓ Connected with alternative configuration!");
+          return altPool;
+        } catch (altErr) {
+          console.log(`Alternative config failed: ${altErr.message}`);
+          if (altPool) {
+            try {
+              await altPool.close();
+            } catch (closeErr) {
+              // Ignore close errors
+            }
+          }
+        }
+      }
+    }
+    
     throw err;
   }
 };
@@ -189,9 +286,16 @@ const connectToDatabase = async () => {
 // Create pool but delay connection attempt
 const pool = new sql.ConnectionPool(config);
 const poolConnect = connectToDatabase()
-  .then(() => pool)
+  .then((connectedPool) => connectedPool)
   .catch((err) => {
     console.error("Failed to initialize database pool:", err.message);
+    console.log("\n🔧 TROUBLESHOOTING TIPS:");
+    console.log("1. Make sure SQL Server Express is running");
+    console.log("2. Check if SQL Server Browser service is running");
+    console.log("3. Verify SQL Server is configured to accept TCP/IP connections");
+    console.log("4. Try using 'localhost\\SQLEXPRESS' or '(local)\\SQLEXPRESS' in your .env file");
+    console.log("5. Check Windows Firewall settings for SQL Server");
+    
     // Return pool anyway to avoid breaking imports, but connections will fail
     return pool;
   });

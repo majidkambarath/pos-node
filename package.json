@@ -1,17 +1,23 @@
 {
   "name": "pos_backend",
   "version": "1.0.0",
-  "description": "POS Backend Application",
+  "description": "POS Backend Application - Point of Sale System",
   "main": "app.js",
   "bin": "app.js",
   "scripts": {
     "start": "nodemon app.js",
     "dev": "nodemon app.js",
-    "build": "pkg ."
+    "build": "node build.js",
+    "build:clean": "rimraf dist && node build.js",
+    "sign": "node sign-exe.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["pos", "backend", "api", "express", "sql"],
+  "author": "Your Company Name",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "your-repo-url"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -21,16 +27,18 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.10",
-    "pkg": "^5.8.1"
+    "pkg": "^5.8.1",
+    "rimraf": "^3.0.2"
   },
   "pkg": {
-    "targets": ["node18-win-x64"],
+    "targets": ["node20-win-x64"],
     "outputPath": "dist",
     "assets": [
-      "node_modules/**/*",
       "config/**/*",
       "public/**/*",
-      ".env"
+      ".env",
+      "node_modules/mssql/lib/**/*",
+      "node_modules/msnodesqlv8/lib/**/*"
     ],
     "scripts": [
       "app.js",
@@ -49,7 +57,19 @@
       "node_modules/bundle-name/**",
       "node_modules/default-browser-id/**",
       "node_modules/is-docker/**",
-      "node_modules/run-applescript/**"
-    ]
+      "node_modules/run-applescript/**",
+      "node_modules/.bin/**",
+      "node_modules/**/test/**",
+      "node_modules/**/tests/**",
+      "node_modules/**/*.md",
+      "node_modules/**/LICENSE*",
+      "node_modules/**/CHANGELOG*",
+      "node_modules/**/example/**",
+      "node_modules/**/examples/**",
+      "node_modules/**/benchmark/**",
+      "node_modules/**/doc/**",
+      "node_modules/**/docs/**"
+    ],
+    "compress": false
   }
 }

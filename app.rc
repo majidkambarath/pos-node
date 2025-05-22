@@ -1,0 +1,39 @@
+#include <windows.h>
+
+// Version Information
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Your Company Name Ltd"
+            VALUE "FileDescription", "POS Backend Server Application"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "pos_backend"
+            VALUE "LegalCopyright", "Copyright (C) 2024 Your Company Name"
+            VALUE "LegalTrademarks", "POS Backend is a trademark of Your Company"
+            VALUE "OriginalFilename", "pos_backend.exe"
+            VALUE "ProductName", "Point of Sale Backend System"
+            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "Comments", "Professional POS Backend Server for retail management"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+// Application Icon (if you have app.ico file)
+// 1 ICON "app.ico"
+
+// Application Manifest for Windows compatibility
+1 24 "app.manifest"
