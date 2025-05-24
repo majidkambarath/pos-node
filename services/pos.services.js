@@ -1,14 +1,56 @@
 const sql = require('mssql');
-const { pool } = require("../config/db");
+const { getPool, poolConnect } = require("../config/db");
 const { createAppError } = require("../utils/errorHandler");
 
+/**
+ * Ensures database connection is available
+ * @returns {Promise<Object>} Connected pool instance
+ */
+const ensureConnection = async () => {
+  try {
+    // First, wait for the initial connection attempt to complete
+    await poolConnect;
+    
+    // Then get the current pool
+    const pool = await getPool();
+    
+    if (!pool) {
+      throw new Error("Database pool is not available");
+    }
+    
+    if (!pool.connected) {
+      throw new Error("Database pool is not connected");
+    }
+    
+    return pool;
+  } catch (error) {
+    console.error("Database connection error:", error.message);
+    
+    // Provide more specific error context
+    let errorMessage = "Database connection failed";
+    
+    if (error.message.includes('ENOTFOUND')) {
+      errorMessage += ": Server not found. Check DB_SERVER in .env file.";
+    } else if (error.message.includes('ECONNREFUSED')) {
+      errorMessage += ": Connection refused. Is SQL Server running?";
+    } else if (error.message.includes('Login failed')) {
+      errorMessage += ": Authentication failed. Check credentials.";
+    } else if (error.message.includes('Cannot open database')) {
+      errorMessage += ": Database access denied. Check database name and permissions.";
+    } else {
+      errorMessage += `: ${error.message}`;
+    }
+    
+    throw createAppError(errorMessage, 500);
+  }
+};
 /**
  * Fetches tables and their associated seats
  * @returns {Array} Array of table objects with nested seats
  */
 const getTableSeatsData = async () => {
   try {
-    await pool.connect();
+    const connectedPool = await ensureConnection();
 
     const query = `
       SELECT 
@@ -25,7 +67,7 @@ const getTableSeatsData = async () => {
         t.TableID, s.SeatId
     `;
 
-    const result = await pool.request().query(query);
+    const result = await connectedPool.request().query(query);
 
     const tables = [];
     const tableMap = new Map();
@@ -56,6 +98,7 @@ const getTableSeatsData = async () => {
 
     return tables;
   } catch (error) {
+    console.error("Error in getTableSeatsData:", error.message);
     throw createAppError(`Error fetching table seats: ${error.message}`, 500);
   }
 };
@@ -67,7 +110,7 @@ const getTableSeatsData = async () => {
  */
 const getAllItems = async (options = {}) => {
   try {
-    await pool.connect();
+    const connectedPool = await ensureConnection();
 
     let query = "SELECT * FROM tblItemMaster";
     const params = [];
@@ -111,7 +154,7 @@ const getAllItems = async (options = {}) => {
       });
     }
 
-    const request = pool.request();
+    const request = connectedPool.request();
     params.forEach((param) => {
       request.input(param.name, param.type, param.value);
     });
@@ -120,6 +163,7 @@ const getAllItems = async (options = {}) => {
 
     return result.recordset;
   } catch (error) {
+    console.error("Error in getAllItems:", error.message);
     throw createAppError(`Error fetching items: ${error.message}`, 500);
   }
 };
@@ -130,13 +174,14 @@ const getAllItems = async (options = {}) => {
  */
 const getAllCategories = async () => {
   try {
-    await pool.connect();
+    const connectedPool = await ensureConnection();
 
     const query = "SELECT * FROM dbo.tblGroup ORDER BY GrpName";
-    const result = await pool.request().query(query);
+    const result = await connectedPool.request().query(query);
 
     return result.recordset;
   } catch (error) {
+    console.error("Error in getAllCategories:", error.message);
     throw createAppError(`Error fetching categories: ${error.message}`, 500);
   }
 };
@@ -147,13 +192,14 @@ const getAllCategories = async () => {
  */
 const getAllEmployees = async () => {
   try {
-    await pool.connect();
+    const connectedPool = await ensureConnection();
 
     const query = "SELECT Code, EmpName FROM dbo.tblEmployee WHERE Active=1 ORDER BY EmpName";
-    const result = await pool.request().query(query);
+    const result = await connectedPool.request().query(query);
 
     return result.recordset;
   } catch (error) {
+    console.error("Error in getAllEmployees:", error.message);
     throw createAppError(`Error fetching employees: ${error.message}`, 500);
   }
 };
@@ -215,13 +261,11 @@ const processOrder = async ({
     tableId = parseInt(tableId) || 0;
     total = parseFloat(total) || 0;
 
-    if (!pool.connected) {
-      await pool.connect();
-    }
-
+    const connectedPool = await ensureConnection();
+    
     const orderType = option === 1 ? "Order" : option === 2 ? "DineIn" : "TakeAway";
 
-    transaction = new sql.Transaction(pool);
+    transaction = new sql.Transaction(connectedPool);
     await transaction.begin();
     console.log("Transaction started successfully");
 
@@ -562,15 +606,14 @@ const processOrder = async ({
  * @returns {Object} Object with next order number
  */
 const latestOrder = async () => {
-  const sql = require('mssql'); // Import sql module directly in this function
   let transaction;
   
   try {
-    // Connect to the database
-    await pool.connect();
+    // Get connected pool
+    const connectedPool = await ensureConnection();
 
     // Create a transaction
-    transaction = new sql.Transaction(pool);
+    transaction = new sql.Transaction(connectedPool);
     await transaction.begin();
 
     // Fetch the next order number
@@ -590,16 +633,8 @@ const latestOrder = async () => {
         console.error("Rollback error:", rollbackError);
       }
     }
+    console.error("Error in latestOrder:", error.message);
     throw createAppError(`Error fetching latest order number: ${error.message}`, 500);
-  } finally {
-    // Release the connection
-    try {
-      if (pool.connected) {
-        await pool.close();
-      }
-    } catch (closeError) {
-      console.error("Error closing pool:", closeError);
-    }
   }
 };
 
@@ -611,7 +646,7 @@ const latestOrder = async () => {
  */
 const authenticateUser = async (userName, password) => {
   try {
-    await pool.connect();
+    const connectedPool = await ensureConnection();
 
     const query = `
       SELECT UserId, User_Name 
@@ -619,7 +654,7 @@ const authenticateUser = async (userName, password) => {
       WHERE User_Name = @userName AND Password = @password
     `;
 
-    const result = await pool.request()
+    const result = await connectedPool.request()
       .input("userName", userName)
       .input("password", password)
       .query(query);
@@ -630,6 +665,7 @@ const authenticateUser = async (userName, password) => {
 
     return result.recordset[0];
   } catch (error) {
+    console.error("Error in authenticateUser:", error.message);
     if (error.statusCode) {
       throw error;
     }

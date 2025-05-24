@@ -3,7 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const path = require("path");
 const { poolConnect } = require("./config/db"); // Import poolConnect instead of pool
-const router = require("./routers");
+const router = require("./routers/index.js");
 const { errorHandler } = require("./utils/errorHandler");
 
 dotenv.config({ path: path.join(__dirname, '.env') });
