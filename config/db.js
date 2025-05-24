@@ -1,303 +1,340 @@
+// config/db.js - Enhanced Database Configuration with Authentication Fix
 const dotenv = require("dotenv");
 const sql = require("mssql");
 const fs = require("fs");
 const path = require("path");
 
-// Get the current execution directory
-const currentDir = process.cwd();
-const execDir = path.dirname(process.execPath);
-
-console.log('Current directory:', currentDir);
-console.log('Executable directory:', execDir);
-
-// Try to load environment variables from multiple possible locations
-const envPaths = [
-  '.env',
-  path.join(currentDir, '.env'),
-  path.join(__dirname, '.env'),
-  path.join(execDir, '.env')
-];
-
-// Try to load from a config.json file
-const configPaths = [
-  'config.json',
-  path.join(currentDir, 'config.json'),
-  path.join(__dirname, 'config.json'),
-  path.join(execDir, 'config.json')
-];
-
-console.log('Searching for configuration files...');
-
-let envLoaded = false;
-
-// First try env files
-for (const envPath of envPaths) {
-  try {
-    console.log(`Checking for .env at: ${envPath}`);
-    if (fs.existsSync(envPath)) {
-      dotenv.config({ path: envPath });
-      console.log(`✓ Successfully loaded environment variables from ${envPath}`);
-      envLoaded = true;
-      break;
-    }
-  } catch (err) {
-    console.error(`Error checking .env at ${envPath}:`, err.message);
-  }
-}
-
-// Then try config files
-if (!envLoaded) {
-  console.log("Could not find .env file. Checking for config.json...");
-  
-  for (const configPath of configPaths) {
-    try {
-      console.log(`Checking for config.json at: ${configPath}`);
-      if (fs.existsSync(configPath)) {
-        const configData = fs.readFileSync(configPath, 'utf8');
-        console.log(`Found config file at ${configPath}`);
-        
-        try {
-          const config = JSON.parse(configData);
-          console.log('Parsed JSON configuration successfully');
-          
-          // Set environment variables from config
-          Object.keys(config).forEach(key => {
-            process.env[key] = config[key];
-          });
-          
-          console.log(`✓ Successfully loaded configuration from ${configPath}`);
-          envLoaded = true;
-          break;
-        } catch (parseErr) {
-          console.error(`Error parsing JSON from ${configPath}:`, parseErr.message);
-          console.log('First 100 characters of file:', configData.substring(0, 100));
-        }
-      }
-    } catch (err) {
-      console.error(`Error accessing config.json at ${configPath}:`, err.message);
-    }
-  }
-}
-
-// If no config was loaded, set some hardcoded defaults for testing
-if (!envLoaded) {
-  console.warn("⚠️ NO CONFIGURATION FILES FOUND! Setting hardcoded database configuration...");
-  
-  // Hardcode the configuration directly in code as a last resort
-  process.env.DB_USER = "sa";
-  process.env.DB_PASSWORD = "113a213635200c3630213c263c3120";
-  process.env.DB_SERVER = "MAJID\\SQLEXPRESS";
-  process.env.DB_NAME = "RESTPOS";
-  process.env.DB_PORT = "1433";
-  process.env.DB_ENCRYPT = "false";
-  process.env.DB_TRUST_CERT = "true";
-  process.env.DB_INTEGRATED_SECURITY = "true";
-  process.env.PORT = "4444";
-  
-  console.log("✓ Using hardcoded database configuration");
-}
+// Load environment variables
+dotenv.config();
 
 const decryptSecret = (encrypted, salt = "POS_SYSTEM") => {
   try {
-    // Check if encrypted value exists
-    if (!encrypted) {
-      console.error("No encrypted password provided");
+    if (!encrypted || encrypted.length === 0) {
+      console.error("❌ Error: Empty or undefined encrypted password");
       return "";
     }
 
     const saltChars = salt.split("").map((char) => char.charCodeAt(0));
     const hexPairs = [];
+    
     for (let i = 0; i < encrypted.length; i += 2) {
       if (i + 1 < encrypted.length) {
         hexPairs.push(encrypted.substring(i, i + 2));
       }
     }
+    
     const decrypted = hexPairs.map((hex, index) => {
       const charCode = parseInt(hex, 16);
       const saltChar = saltChars[index % saltChars.length];
       return String.fromCharCode(charCode ^ saltChar);
     });
-    
+
     return decrypted.join("");
   } catch (error) {
-    console.error("Decryption error:", error);
+    console.error("❌ Decryption error:", error.message);
     return "";
   }
 };
 
-// Log environment variables for debugging (remove in production)
-console.log("Environment variables loaded:", {
-  DB_USER: process.env.DB_USER ? "defined" : "undefined",
-  DB_PASSWORD: process.env.DB_PASSWORD ? "defined" : "undefined",
-  DB_SERVER: process.env.DB_SERVER ? "defined" : "undefined",
-  DB_NAME: process.env.DB_NAME ? "defined" : "undefined",
-  DB_PORT: process.env.DB_PORT || "1433",
-});
-
-// Get and decrypt password
-const encryptedPassword = process.env.DB_PASSWORD || "";
-const decryptedPassword = decryptSecret(encryptedPassword);
-
-// Check required connection parameters before creating config
-if (!process.env.DB_SERVER) {
-  console.error("ERROR: DB_SERVER environment variable is not defined");
-}
-
-if (!process.env.DB_USER) {
-  console.error("ERROR: DB_USER environment variable is not defined");
-}
-
-if (!process.env.DB_NAME) {
-  console.error("ERROR: DB_NAME environment variable is not defined");
-}
-
-// Fix server name - handle SQL Server instance names properly
-let serverName = process.env.DB_SERVER || "";
-console.log('Original server name from env:', serverName);
-
-// If it's a named instance (contains backslash), format it properly
-if (serverName.includes('\\')) {
-  // For named instances, we need to use the full server\instance format
-  console.log('Detected SQL Server named instance:', serverName);
-} else if (serverName.includes('/')) {
-  // Handle forward slash notation and convert to backslash
-  serverName = serverName.replace('/', '\\');
-  console.log('Converted forward slash to backslash:', serverName);
-}
-
-console.log('Final server name for connection:', serverName);
-
-// Create database configuration
-const config = {
-  user: process.env.DB_USER || "",
-  password: decryptedPassword,
-  server: serverName,
-  database: process.env.DB_NAME || "",
-  port: parseInt(process.env.DB_PORT || "1433"),
-  options: {
-    encrypt: process.env.DB_ENCRYPT === "true",
-    trustServerCertificate: process.env.DB_TRUST_CERT === "true",
-    enableArithAbort: true,
-    integratedSecurity: process.env.DB_INTEGRATED_SECURITY === "true",
-    // Add instanceName for named instances
-    instanceName: serverName.includes('\\') ? serverName.split('\\')[1] : undefined,
-  },
+// Validate environment variables based on authentication method
+const validateEnvVars = () => {
+  const integratedSecurity = process.env.DB_INTEGRATED_SECURITY === "true";
+  
+  // Always required
+  const required = ['DB_SERVER', 'DB_NAME'];
+  
+  // Add authentication-specific requirements
+  if (integratedSecurity) {
+    console.log("🔐 Using Windows Authentication");
+  } else {
+    required.push('DB_USER', 'DB_PASSWORD');
+    console.log("🔐 Using SQL Server Authentication");
+  }
+  
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    console.error("❌ Missing required environment variables:", missing.join(', '));
+    console.error("📋 Please check your .env file and ensure these variables are set:");
+    missing.forEach(key => console.error(`   - ${key}`));
+    
+    if (!integratedSecurity) {
+      console.error("\n💡 For SQL Server Authentication, you need:");
+      console.error("   - DB_USER (e.g., sa)");
+      console.error("   - DB_PASSWORD (encrypted password)");
+      console.error("   - DB_INTEGRATED_SECURITY=false");
+    } else {
+      console.error("\n💡 For Windows Authentication, you need:");
+      console.error("   - DB_INTEGRATED_SECURITY=true");
+      console.error("   - DB_USER and DB_PASSWORD should be empty or not set");
+    }
+    
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+  
+  console.log("✅ All required environment variables found");
 };
 
-// For named instances, we might need to use just the server name without instance in the server field
-if (serverName.includes('\\')) {
-  const parts = serverName.split('\\');
-  config.server = parts[0]; // Just the server name
-  config.options.instanceName = parts[1]; // The instance name
-  console.log('Using server:', config.server, 'with instance:', config.options.instanceName);
-}
-
-console.log('Database configuration:', {
-  server: config.server,
-  database: config.database,
-  user: config.user,
-  port: config.port,
-  instanceName: config.options.instanceName,
-  integratedSecurity: config.options.integratedSecurity
-});
-
-// Only attempt to connect if we have the required parameters
-const connectToDatabase = async () => {
-  // Validate required config properties
-  if (!config.server || !config.user || !config.database) {
-    throw new Error(
-      "Missing required database configuration. Check your environment variables."
-    );
-  }
-
-  const pool = new sql.ConnectionPool(config);
-  try {
-    console.log('Attempting to connect to database...');
-    await pool.connect();
-    console.log("Connected to MSSQL database successfully");
-    return pool;
-  } catch (err) {
-    console.error("Database connection failed:", err);
+// Get multiple server name options to try
+const getServerOptions = (originalServer) => {
+  const options = [];
+  const server = originalServer.trim();
+  
+  // Add original server
+  options.push(server);
+  
+  // If it contains backslashes, try different formats
+  if (server.includes('\\')) {
+    const parts = server.split('\\');
+    const computerName = parts[0];
+    const instanceName = parts[1];
     
-    // Try alternative connection approaches for SQL Server Express
-    if (err.code === 'EINSTLOOKUP' || err.code === 'ENOTFOUND') {
-      console.log('Trying alternative connection methods for SQL Server Express...');
+    // Try localhost format first (most likely to work)
+    if (!server.toLowerCase().startsWith('localhost')) {
+      options.unshift(`localhost\\${instanceName}`);
+    }
+    
+    // Try (local) format
+    options.push(`(local)\\${instanceName}`);
+    
+    // Try dot notation
+    options.push(`.\\${instanceName}`);
+    
+    // Try IP address
+    options.push(`127.0.0.1\\${instanceName}`);
+    
+    // Try with explicit port
+    options.push(`localhost,1433\\${instanceName}`);
+    options.push(`${computerName},1433\\${instanceName}`);
+  }
+  
+  // Remove duplicates while preserving order
+  const seen = new Set();
+  return options.filter(option => {
+    if (seen.has(option)) return false;
+    seen.add(option);
+    return true;
+  });
+};
+
+// Initialize configuration with proper authentication handling
+const initializeConfig = () => {
+  try {
+    validateEnvVars();
+
+    const integratedSecurity = process.env.DB_INTEGRATED_SECURITY === "true";
+    const originalServer = process.env.DB_SERVER;
+    const serverOptions = getServerOptions(originalServer);
+    
+    console.log("🔗 Available server options to try:");
+    serverOptions.forEach((option, index) => {
+      console.log(`   ${index + 1}. ${option}`);
+    });
+
+    let baseConfig = {
+      database: process.env.DB_NAME,
+      port: parseInt(process.env.DB_PORT || "1433"),
+      options: {
+        encrypt: process.env.DB_ENCRYPT === "true",
+        trustServerCertificate: process.env.DB_TRUST_CERT === "true",
+        enableArithAbort: true,
+        integratedSecurity: integratedSecurity,
+        connectTimeout: 30000,
+        requestTimeout: 30000,
+        connectionIsolationLevel: sql.ISOLATION_LEVEL.READ_COMMITTED,
+        abortTransactionOnError: true,
+      },
+      pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000,
+      },
+    };
+
+    // Add authentication details based on method
+    if (integratedSecurity) {
+      console.log("🔐 Authentication: Windows Authentication (Integrated Security)");
+      // For Windows Authentication, don't set user/password
+    } else {
+      const encryptedPassword = process.env.DB_PASSWORD;
+      const decryptedPassword = decryptSecret(encryptedPassword);
       
-      // Try with localhost instead of machine name
-      const alternativeConfigs = [
-        {
-          ...config,
-          server: 'localhost',
-          options: {
-            ...config.options,
-            instanceName: 'SQLEXPRESS'
-          }
-        },
-        {
-          ...config,
-          server: '127.0.0.1',
-          options: {
-            ...config.options,
-            instanceName: 'SQLEXPRESS'
-          }
-        },
-        {
-          ...config,
-          server: 'localhost\\SQLEXPRESS',
-          options: {
-            ...config.options,
-            instanceName: undefined
-          }
-        },
-        {
-          ...config,
-          server: '(local)\\SQLEXPRESS',
-          options: {
-            ...config.options,
-            instanceName: undefined
-          }
+      if (!decryptedPassword) {
+        throw new Error("Failed to decrypt database password");
+      }
+      
+      baseConfig.user = process.env.DB_USER;
+      baseConfig.password = decryptedPassword;
+      console.log(`🔐 Authentication: SQL Server Authentication (User: ${baseConfig.user})`);
+    }
+
+    return { baseConfig, serverOptions };
+  } catch (error) {
+    console.error("❌ Configuration initialization failed:", error.message);
+    throw error;
+  }
+};
+
+// Create connection pool with multiple server attempts
+const createConnectionPool = async (baseConfig, serverOptions, maxRetries = 2) => {
+  let lastError;
+  
+  for (const serverName of serverOptions) {
+    console.log(`\n🔄 Trying server: "${serverName}"`);
+    
+    const config = { ...baseConfig, server: serverName };
+    
+    // Log connection attempt (without password)
+    console.log("📋 Connection details:");
+    console.log(`   Server: ${config.server}`);
+    console.log(`   Database: ${config.database}`);
+    console.log(`   Port: ${config.port}`);
+    console.log(`   Encrypt: ${config.options.encrypt}`);
+    console.log(`   Trust Certificate: ${config.options.trustServerCertificate}`);
+    console.log(`   Integrated Security: ${config.options.integratedSecurity}`);
+    if (!config.options.integratedSecurity && config.user) {
+      console.log(`   User: ${config.user}`);
+    }
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`   Attempt ${attempt}/${maxRetries}...`);
+        
+        const pool = new sql.ConnectionPool(config);
+        
+        // Add event listeners
+        pool.on('connect', () => {
+          console.log(`✅ Database connection established with server: ${serverName}`);
+        });
+        
+        pool.on('error', (err) => {
+          console.error('❌ Database pool error:', err.message);
+        });
+
+        await pool.connect();
+        console.log("🎉 Connected to MSSQL database successfully!");
+        
+        // Test the connection with a simple query
+        const result = await pool.request().query('SELECT @@VERSION as version');
+        console.log("✅ Database connection verified with test query");
+        
+        return pool;
+        
+      } catch (error) {
+        lastError = error;
+        console.error(`   ❌ Attempt ${attempt} failed:`, error.message);
+        
+        // Provide specific error guidance
+        if (error.message.includes('ENOTFOUND') || error.message.includes('EINSTLOOKUP')) {
+          console.error("   🔍 DNS/Server not found - trying next server option...");
+        } else if (error.message.includes('ECONNREFUSED')) {
+          console.error("   🔍 Connection refused - SQL Server may not be running");
+        } else if (error.message.includes('Login failed')) {
+          console.error("   🔍 Authentication failed - check credentials");
+        } else if (error.message.includes('Cannot open database')) {
+          console.error("   🔍 Database access denied - check database name and permissions");
         }
-      ];
-      
-      for (const altConfig of alternativeConfigs) {
-        try {
-          console.log(`Trying alternative config: server=${altConfig.server}, instance=${altConfig.options.instanceName || 'none'}`);
-          const altPool = new sql.ConnectionPool(altConfig);
-          await altPool.connect();
-          console.log("✓ Connected with alternative configuration!");
-          return altPool;
-        } catch (altErr) {
-          console.log(`Alternative config failed: ${altErr.message}`);
-          if (altPool) {
-            try {
-              await altPool.close();
-            } catch (closeErr) {
-              // Ignore close errors
-            }
-          }
+        
+        if (attempt < maxRetries) {
+          const delay = 1000;
+          console.log(`   ⏳ Waiting ${delay/1000} second before retry...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
         }
       }
     }
     
-    throw err;
+    console.log(`❌ All attempts failed for server: ${serverName}`);
   }
+  
+  // Comprehensive troubleshooting guide
+  console.error("\n💥 All server options failed. Detailed troubleshooting:");
+  
+  console.error("\n🔧 STEP 1: Check SQL Server Service");
+  console.error("   • Press Win+R, type 'services.msc', press Enter");
+  console.error("   • Find 'SQL Server (SQLEXPRESS)' - should be 'Running'");
+  console.error("   • Find 'SQL Server Browser' - should be 'Running'");
+  console.error("   • If stopped, right-click → Start");
+  
+  console.error("\n🔧 STEP 2: Enable TCP/IP Protocol");
+  console.error("   • Press Win+R, type 'SQLServerManager15.msc' (or 14, 13), press Enter");
+  console.error("   • Go to 'SQL Server Network Configuration' → 'Protocols for SQLEXPRESS'");
+  console.error("   • Right-click 'TCP/IP' → Enable");
+  console.error("   • Double-click 'TCP/IP' → IP Addresses tab");
+  console.error("   • Find 'IPAll' section, set 'TCP Port' to 1433");
+  console.error("   • Restart SQL Server service");
+  
+  console.error("\n🔧 STEP 3: Try Different .env Configurations");
+  console.error("   # Try these one by one in your .env file:");
+  console.error("   DB_SERVER=localhost\\SQLEXPRESS");
+  console.error("   DB_SERVER=(local)\\SQLEXPRESS");
+  console.error("   DB_SERVER=.\\SQLEXPRESS");
+  console.error("   DB_SERVER=127.0.0.1\\SQLEXPRESS");
+  
+  console.error("\n🔧 STEP 4: Authentication Issues");
+  const integratedSecurity = baseConfig.options.integratedSecurity;
+  if (integratedSecurity) {
+    console.error("   Current: Windows Authentication");
+    console.error("   • Make sure the Windows user has SQL Server access");
+    console.error("   • Or switch to SQL Authentication:");
+    console.error("     DB_INTEGRATED_SECURITY=false");
+    console.error("     DB_USER=sa");
+    console.error("     DB_PASSWORD=your_encrypted_password");
+  } else {
+    console.error("   Current: SQL Server Authentication");
+    console.error("   • Make sure 'sa' account is enabled");
+    console.error("   • Check if password is correct");
+    console.error("   • Or try Windows Authentication:");
+    console.error("     DB_INTEGRATED_SECURITY=true");
+    console.error("     # Remove or comment out DB_USER and DB_PASSWORD");
+  }
+  
+  console.error("\n🔧 STEP 5: Test Connection with SSMS");
+  console.error("   • Open SQL Server Management Studio");
+  console.error("   • Try connecting with the same server name");
+  console.error("   • Use the same authentication method");
+  
+  throw lastError;
 };
 
-// Create pool but delay connection attempt
-const pool = new sql.ConnectionPool(config);
-const poolConnect = connectToDatabase()
-  .then((connectedPool) => connectedPool)
-  .catch((err) => {
-    console.error("Failed to initialize database pool:", err.message);
-    console.log("\n🔧 TROUBLESHOOTING TIPS:");
-    console.log("1. Make sure SQL Server Express is running");
-    console.log("2. Check if SQL Server Browser service is running");
-    console.log("3. Verify SQL Server is configured to accept TCP/IP connections");
-    console.log("4. Try using 'localhost\\SQLEXPRESS' or '(local)\\SQLEXPRESS' in your .env file");
-    console.log("5. Check Windows Firewall settings for SQL Server");
-    
-    // Return pool anyway to avoid breaking imports, but connections will fail
-    return pool;
-  });
+// Initialize database connection
+let pool;
+let poolConnect;
 
-module.exports = { pool, poolConnect, sql };
+try {
+  const { baseConfig, serverOptions } = initializeConfig();
+  
+  poolConnect = createConnectionPool(baseConfig, serverOptions)
+    .then((connectedPool) => {
+      pool = connectedPool;
+      return pool;
+    })
+    .catch((err) => {
+      console.error("💥 Fatal database connection error:", err.message);
+      return Promise.reject(err);
+    });
+
+} catch (error) {
+  console.error("💥 Database module initialization failed:", error.message);
+  poolConnect = Promise.reject(error);
+}
+
+// Export with error handling
+module.exports = { 
+  pool, 
+  poolConnect, 
+  sql,
+  isConnected: () => {
+    return pool && pool.connected;
+  },
+  getConnectionInfo: () => {
+    if (!pool || !pool.config) return null;
+    return {
+      server: pool.config.server,
+      database: pool.config.database,
+      user: pool.config.user || 'Windows Authentication',
+      port: pool.config.port,
+      connected: pool.connected,
+      integratedSecurity: pool.config.options?.integratedSecurity || false
+    };
+  }
+};
