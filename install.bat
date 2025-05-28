@@ -1,9 +1,9 @@
 @echo off
-title POS Backend Installer v1.0
+title POS Backend Service Installer v2.0
 color 0A
 
 echo ====================================
-echo  POS Backend Installation Wizard
+echo  POS Backend Service Installation
 echo ====================================
 echo.
 
@@ -45,11 +45,6 @@ if exist "%CURRENT_DIR%pos_backend.exe" (
     echo - %CURRENT_DIR%
     echo - %CURRENT_DIR%dist\
     echo.
-    echo SOLUTIONS:
-    echo 1. Make sure you've built the application first: npm run build
-    echo 2. Copy pos_backend.exe to the same folder as install.bat
-    echo 3. Or run install.bat from the dist folder
-    echo.
     pause
     exit /b 1
 )
@@ -80,8 +75,7 @@ if not exist "%INSTALL_DIR%" (
 
 echo.
 echo Step 4: Adding Windows Defender Exclusion...
-echo This prevents antivirus from deleting the application...
-powershell -Command "try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -Force; Write-Host '[OK] Windows Defender exclusion added' } catch { Write-Host '[WARNING] Could not add exclusion automatically - please add manually' }"
+powershell -Command "try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -Force; Write-Host '[OK] Windows Defender exclusion added' } catch { Write-Host '[WARNING] Could not add exclusion automatically' }"
 
 echo.
 echo Step 5: Copying Application Files...
@@ -103,76 +97,106 @@ if not "%ENV_FILE%"=="" (
     )
 )
 
-:: Copy additional files if they exist
-if exist "%CURRENT_DIR%README.txt" (
-    copy "%CURRENT_DIR%README.txt" "%INSTALL_DIR%\" >nul
-    echo [OK] Copied documentation
-)
+echo.
+echo Step 6: Creating Service Wrapper Scripts...
 
-if exist "%CURRENT_DIR%checksum.txt" (
-    copy "%CURRENT_DIR%checksum.txt" "%INSTALL_DIR%\" >nul
-    echo [OK] Copied checksum file
-)
+:: Create the service wrapper script
+echo @echo off > "%INSTALL_DIR%\service_wrapper.bat"
+echo cd /d "%INSTALL_DIR%" >> "%INSTALL_DIR%\service_wrapper.bat"
+echo :loop >> "%INSTALL_DIR%\service_wrapper.bat"
+echo echo Starting POS Backend at %%time%% >> "%INSTALL_DIR%\service_wrapper.bat"
+echo pos_backend.exe >> "%INSTALL_DIR%\service_wrapper.bat"
+echo echo POS Backend stopped at %%time%% - Restarting in 5 seconds... >> "%INSTALL_DIR%\service_wrapper.bat"
+echo timeout /t 5 /nobreak ^>nul >> "%INSTALL_DIR%\service_wrapper.bat"
+echo goto loop >> "%INSTALL_DIR%\service_wrapper.bat"
+
+echo [OK] Service wrapper created
 
 echo.
-echo Step 6: Creating Desktop Shortcut...
-powershell -Command "try { $WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%USERPROFILE%\Desktop\POS Backend.lnk'); $Shortcut.TargetPath = '%INSTALL_DIR%\pos_backend.exe'; $Shortcut.WorkingDirectory = '%INSTALL_DIR%'; $Shortcut.Description = 'POS Backend Server'; $Shortcut.Save(); Write-Host '[OK] Desktop shortcut created' } catch { Write-Host '[WARNING] Could not create desktop shortcut' }"
+echo Step 7: Creating Silent Background Runner...
+
+:: Create silent background runner (VBScript)
+echo Set WshShell = CreateObject("WScript.Shell") > "%INSTALL_DIR%\run_silent.vbs"
+echo WshShell.Run chr(34) ^& "%INSTALL_DIR%\service_wrapper.bat" ^& chr(34), 0 >> "%INSTALL_DIR%\run_silent.vbs"
+echo Set WshShell = Nothing >> "%INSTALL_DIR%\run_silent.vbs"
+
+echo [OK] Silent runner created
 
 echo.
-echo Step 7: Setting up Windows Firewall...
-echo Adding firewall rules for the application...
+echo Step 8: Creating Startup Task...
+
+:: Create startup task script
+echo @echo off > "%INSTALL_DIR%\setup_startup_task.bat"
+echo title POS Backend Startup Task >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo Creating Windows Startup Task... >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo schtasks /delete /tn "POS Backend Startup" /f ^>nul 2^>^&1 >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo schtasks /create /tn "POS Backend Startup" /tr "%INSTALL_DIR%\run_silent.vbs" /sc onstart /ru SYSTEM /rl HIGHEST /f >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo if %%errorLevel%% == 0 ( >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo     echo [OK] Startup task created successfully! >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo     echo POS Backend will now start automatically when Windows boots. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo     echo It will run silently in the background without showing any windows. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo ^) else ( >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo     echo [ERROR] Failed to create startup task. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo ^) >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo Starting POS Backend now... >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo cscript //nologo "%INSTALL_DIR%\run_silent.vbs" >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo [OK] POS Backend is now running in the background! >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo echo. >> "%INSTALL_DIR%\setup_startup_task.bat"
+echo pause >> "%INSTALL_DIR%\setup_startup_task.bat"
+
+echo [OK] Startup task script created
+
+echo.
+echo Step 9: Setting up Windows Firewall...
 netsh advfirewall firewall delete rule name="POS Backend Server" >nul 2>&1
 netsh advfirewall firewall add rule name="POS Backend Server" dir=in action=allow program="%INSTALL_DIR%\pos_backend.exe" enable=yes >nul 2>&1
 if %errorLevel% == 0 (
     echo [OK] Firewall rule added
 ) else (
-    echo [WARNING] Could not add firewall rule - you may need to configure manually
+    echo [WARNING] Could not add firewall rule
 )
 
 echo.
-echo Step 8: Final Configuration...
-cd /d "%INSTALL_DIR%"
+echo Step 10: Creating Management Scripts...
 
-:: Create a startup batch file
-(
-echo @echo off
-echo title POS Backend Server
-echo color 0A
-echo cd /d "%INSTALL_DIR%"
-echo echo ====================================
-echo echo  POS Backend Server
-echo echo ====================================
-echo echo.
-echo echo Server Location: %INSTALL_DIR%
-echo echo Starting server... Please wait...
-echo echo.
-echo echo Press Ctrl+C to stop the server
-echo echo Close this window to stop the server
-echo echo.
-echo pos_backend.exe
-echo echo.
-echo echo Server has stopped.
-echo pause
-) > start_pos.bat
+:: Create stop all script
+echo @echo off > "%INSTALL_DIR%\stop_all.bat"
+echo title Stop POS Backend >> "%INSTALL_DIR%\stop_all.bat"
+echo echo Stopping all POS Backend processes... >> "%INSTALL_DIR%\stop_all.bat"
+echo taskkill /f /im pos_backend.exe /t 2^>nul >> "%INSTALL_DIR%\stop_all.bat"
+echo taskkill /f /im wscript.exe /t 2^>nul >> "%INSTALL_DIR%\stop_all.bat"
+echo schtasks /end /tn "POS Backend Startup" 2^>nul >> "%INSTALL_DIR%\stop_all.bat"
+echo echo All POS Backend processes stopped. >> "%INSTALL_DIR%\stop_all.bat"
+echo pause >> "%INSTALL_DIR%\stop_all.bat"
 
-echo [OK] Startup script created
+:: Create start script
+echo @echo off > "%INSTALL_DIR%\start_background.bat"
+echo title Start POS Backend Background >> "%INSTALL_DIR%\start_background.bat"
+echo echo Starting POS Backend in background... >> "%INSTALL_DIR%\start_background.bat"
+echo cscript //nologo "%INSTALL_DIR%\run_silent.vbs" >> "%INSTALL_DIR%\start_background.bat"
+echo echo POS Backend started in background. >> "%INSTALL_DIR%\start_background.bat"
+echo pause >> "%INSTALL_DIR%\start_background.bat"
 
 :: Create uninstaller
-(
-echo @echo off
-echo title POS Backend Uninstaller
-echo echo Removing POS Backend...
-echo taskkill /f /im pos_backend.exe 2^>nul
-echo timeout /t 2 /nobreak ^>nul
-echo rmdir /s /q "%INSTALL_DIR%"
-echo del "%USERPROFILE%\Desktop\POS Backend.lnk" 2^>nul
-echo netsh advfirewall firewall delete rule name="POS Backend Server" ^>nul 2^>^&1
-echo powershell -Command "Remove-MpPreference -ExclusionPath '%INSTALL_DIR%' -Force" 2^>nul
-echo echo POS Backend has been removed.
-echo pause
-) > uninstall.bat
+echo @echo off > "%INSTALL_DIR%\uninstall.bat"
+echo title POS Backend Uninstaller >> "%INSTALL_DIR%\uninstall.bat"
+echo echo Removing POS Backend... >> "%INSTALL_DIR%\uninstall.bat"
+echo taskkill /f /im pos_backend.exe 2^>nul >> "%INSTALL_DIR%\uninstall.bat"
+echo taskkill /f /im wscript.exe /t 2^>nul >> "%INSTALL_DIR%\uninstall.bat"
+echo schtasks /delete /tn "POS Backend Startup" /f 2^>nul >> "%INSTALL_DIR%\uninstall.bat"
+echo timeout /t 2 /nobreak ^>nul >> "%INSTALL_DIR%\uninstall.bat"
+echo cd \ >> "%INSTALL_DIR%\uninstall.bat"
+echo rmdir /s /q "%INSTALL_DIR%" >> "%INSTALL_DIR%\uninstall.bat"
+echo netsh advfirewall firewall delete rule name="POS Backend Server" ^>nul 2^>^&1 >> "%INSTALL_DIR%\uninstall.bat"
+echo powershell -Command "Remove-MpPreference -ExclusionPath '%INSTALL_DIR%' -Force" 2^>nul >> "%INSTALL_DIR%\uninstall.bat"
+echo echo POS Backend has been removed. >> "%INSTALL_DIR%\uninstall.bat"
+echo pause >> "%INSTALL_DIR%\uninstall.bat"
 
-echo [OK] Uninstaller created
+echo [OK] Management scripts created
 
 echo.
 echo ====================================
@@ -180,44 +204,35 @@ echo  INSTALLATION COMPLETED SUCCESSFULLY!
 echo ====================================
 echo.
 echo Installation Directory: %INSTALL_DIR%
-echo Desktop Shortcut: Created
-echo Firewall Rule: Added
-echo Antivirus Exclusion: Added (Windows Defender)
-echo Startup Script: start_pos.bat
-echo Uninstaller: uninstall.bat
 echo.
-echo IMPORTANT NOTES:
-echo 1. If you have other antivirus software (not Windows Defender),
-echo    you need to add %INSTALL_DIR% to exclusions manually
-echo 2. Configure your .env file if needed
+echo BACKGROUND SERVICE SETUP:
 echo.
-echo TO START THE APPLICATION:
-echo - Double-click "POS Backend" shortcut on your desktop
-echo - OR run: %INSTALL_DIR%\pos_backend.exe
-echo - OR run: %INSTALL_DIR%\start_pos.bat
+echo To run POS Backend automatically in background:
+echo 1. Run: %INSTALL_DIR%\setup_startup_task.bat (as Administrator)
+echo.
+echo MANUAL CONTROL:
+echo - Start Background: %INSTALL_DIR%\start_background.bat
+echo - Stop All: %INSTALL_DIR%\stop_all.bat
+echo - Uninstall: %INSTALL_DIR%\uninstall.bat
 echo.
 
-set /p START_NOW="Would you like to start the application now? (Y/N): "
-if /i "%START_NOW%"=="Y" (
+set /p AUTO_SETUP="Would you like to set up automatic startup now? (Y/N): "
+if /i "%AUTO_SETUP%"=="Y" (
     echo.
-    echo Starting POS Backend Server...
-    echo ====================================
-    echo.
-    start "POS Backend Server" "%INSTALL_DIR%\start_pos.bat"
-    echo The server is now starting in a separate window.
-    echo Check that window for server status and any error messages.
-    echo.
+    echo Setting up automatic startup...
+    cd /d "%INSTALL_DIR%"
+    call setup_startup_task.bat
 ) else (
     echo.
-    echo You can start the application later using:
-    echo - Desktop shortcut: "POS Backend"
-    echo - Or: %INSTALL_DIR%\start_pos.bat
+    echo You can set up automatic startup later by running:
+    echo %INSTALL_DIR%\setup_startup_task.bat
+    echo.
+    echo To start POS Backend now in background:
+    echo %INSTALL_DIR%\start_background.bat
 )
 
 echo.
-echo TO UNINSTALL: Run %INSTALL_DIR%\uninstall.bat
-echo.
+echo ====================================
 echo Thank you for installing POS Backend!
-echo For support, check README.txt in the installation directory.
-echo.
+echo ====================================
 pause
