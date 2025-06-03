@@ -34,7 +34,46 @@ const getAllItems = async (req, res, next) => {
     next(error);
   }
 };
+const getAllCustomers = async (req, res, next) => {
+  try {
+    const { search, limit, offset } = req.query;
+    const customers = await posServices.getAllCustomers({
+      search,
+      limit: limit ? parseInt(limit) : undefined,
+      offset: offset ? parseInt(offset) : 0,
+    });
 
+    res.status(200).json({
+      success: true,
+      message: "Customers fetched successfully",
+      count: customers.length,
+      data: customers,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+const getPendingOrders = async (req, res, next) => {
+  try {
+    const { search, limit, offset } = req.query;
+    const orders = await posServices.getAllOrders({
+      search,
+      saled: 'no',
+      options: 2,
+      limit: limit ? parseInt(limit) : undefined,
+      offset: offset ? parseInt(offset) : 0,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Pending orders fetched successfully",
+      count: orders.length,
+      data: orders,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 const getAllCategories = async (req, res, next) => {
   try {
     const categories = await posServices.getAllCategories();
@@ -48,7 +87,19 @@ const getAllCategories = async (req, res, next) => {
     next(error);
   }
 };
+const getOrderTokenCounts = async (req, res, next) => {
+  try {
+    const tokenCounts = await posServices.getOrderTokenCounts();
 
+    res.status(200).json({
+      success: true,
+      message: "Order token counts fetched successfully",
+      data: tokenCounts,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
 const getAllEmployees = async (req, res, next) => {
   try {
     const employees = await posServices.getAllEmployees();
@@ -196,4 +247,7 @@ module.exports = {
   latestOrder,
   saveOrder,
   authLogin,
+  getAllCustomers,
+  getPendingOrders,
+  getOrderTokenCounts
 };

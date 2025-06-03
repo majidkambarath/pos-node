@@ -168,6 +168,60 @@ const getAllItems = async (options = {}) => {
   }
 };
 
+const getAllCustomers = async (options = {}) => {
+  try {
+    const connectedPool = await ensureConnection();
+
+    let query = "SELECT * FROM tblCustomer";
+    const params = [];
+    const conditions = [];
+
+    // Search functionality for CustName and ContactNo
+    if (options.search) {
+      conditions.push("(CustName LIKE @search OR ContactNo LIKE @search)");
+      params.push({
+        name: "search",
+        type: sql.VarChar,
+        value: `%${options.search}%`,
+      });
+    }
+
+    // Add WHERE clause if conditions exist
+    if (conditions.length > 0) {
+      query += " WHERE " + conditions.join(" AND ");
+    }
+
+    // Order by customer name
+    query += " ORDER BY CustName";
+
+    // Add pagination if limit is specified
+    if (options.limit && !isNaN(options.limit)) {
+      query += " OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+      params.push({
+        name: "offset",
+        type: sql.Int,
+        value: options.offset || 0,
+      });
+      params.push({
+        name: "limit",
+        type: sql.Int,
+        value: parseInt(options.limit),
+      });
+    }
+
+    const request = connectedPool.request();
+    params.forEach((param) => {
+      request.input(param.name, param.type, param.value);
+    });
+
+    const result = await request.query(query);
+
+    return result.recordset;
+  } catch (error) {
+    console.error("Error in getAllCustomers:", error.message);
+    throw createAppError(`Error fetching customers: ${error.message}`, 500);
+  }
+};
 /**
  * Gets all categories
  * @returns {Array} Array of category objects
@@ -242,6 +296,7 @@ const processOrder = async ({
 }) => {
   let transaction;
   let savedOrderNo = orderNo;
+  let finalCustId = custId;
 
   try {
     console.log("Received order data:", {
@@ -250,7 +305,8 @@ const processOrder = async ({
       option,
       tableId,
       itemsCount: items?.length || 0,
-      firstItem: items?.[0] ? JSON.stringify(items[0]) : "No items",
+      contact,
+      custName,
     });
     
     // Parse numeric values
@@ -269,10 +325,67 @@ const processOrder = async ({
     await transaction.begin();
     console.log("Transaction started successfully");
 
+    // **Customer Management Logic**
+    if (contact && custName) {
+      console.log("Checking customer existence for contact:", contact);
+      
+      // Check if customer exists by contact number
+      const customerCheckQuery = `
+        SELECT CustCode, CustName, Add1, Phone 
+        FROM dbo.tblCustomer 
+        WHERE Phone = @Contact AND Active = 1
+      `;
+      
+      const customerCheckResult = await transaction.request()
+        .input("Contact", sql.VarChar, contact)
+        .query(customerCheckQuery);
+
+      if (customerCheckResult.recordset.length > 0) {
+        // Customer exists - use existing customer ID
+        const existingCustomer = customerCheckResult.recordset[0];
+        finalCustId = existingCustomer.CustCode;
+        console.log("Customer found:", {
+          custCode: existingCustomer.CustCode,
+          custName: existingCustomer.CustName,
+          phone: existingCustomer.Phone
+        });
+      } else {
+        // Customer doesn't exist - create new customer
+        console.log("Customer not found, creating new customer");
+        
+        const newCustomerQuery = `
+          INSERT INTO dbo.tblCustomer (
+            CustName, Add1, Add2, Add3, ContactNo, Phone, Fax, Email, 
+            ShowLast, OpBal, UserId, Active, Status, 
+            BranchId, FinYear, BrCode, Idd, SlsMode, VatRegNo, VatRegDate
+          ) 
+          VALUES (
+            @CustName, @Add1, NULL, NULL, @ContactNo, @Phone, @Fax, NULL,
+            0, 0.00, NULL, 1, 0,
+            NULL, NULL, NULL, NULL, 0, NULL, NULL
+          );
+          SELECT SCOPE_IDENTITY() AS CustCode;
+        `;
+        
+        const newCustomerResult = await transaction.request()
+          .input("CustName", sql.VarChar, custName)
+          .input("Add1", sql.VarChar, address || flatNo || "")  // Use address or flatNo for Add1
+          .input("ContactNo", sql.VarChar, contact)
+          .input("Phone", sql.VarChar, contact)
+          .input("Fax", sql.VarChar, flatNo || "")  // Store flat number in fax field as requested
+          .query(newCustomerQuery);
+        
+        finalCustId = newCustomerResult.recordset[0].CustCode;
+        console.log("New customer created with ID:", finalCustId);
+      }
+    } else {
+      console.log("No contact or customer name provided, using custId:", finalCustId);
+    }
+
     if (status === "NEW") {
       const newOrderNo = await getMaxOrderId(transaction);
 
-      // Insert order master
+      // Insert order master with final customer ID
       const orderMasterQuery = `
         INSERT INTO tblOrder_M (EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status, Prefix, Pr)
         VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr);
@@ -283,7 +396,7 @@ const processOrder = async ({
         .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
         .input("Options", sql.Int, option)
-        .input("CustId", sql.Int, custId || 0)
+        .input("CustId", sql.Int, finalCustId || 0)  // Use final customer ID
         .input("CustName", sql.VarChar, custName || "")
         .input("Flat", sql.VarChar, flatNo || "")
         .input("Address", sql.VarChar, address || "")
@@ -443,6 +556,164 @@ const processOrder = async ({
           `);
       }
 
+    } else if (status === "UPDATED") {
+      console.log(`Updating existing order: ${orderNo}`);
+      
+      // First check if order exists
+      const orderExistsQuery = `
+        SELECT OrderNo FROM tblOrder_M WHERE OrderNo = @OrderNo
+      `;
+      
+      const orderExistsResult = await transaction.request()
+        .input("OrderNo", sql.Int, orderNo)
+        .query(orderExistsQuery);
+
+      if (orderExistsResult.recordset.length === 0) {
+        throw createAppError(`Order ${orderNo} not found`, 404);
+      }
+
+      // Update order master
+      const updateOrderMasterQuery = `
+        UPDATE tblOrder_M SET 
+          EDate = @EDate,
+          Time = @Time,
+          Options = @Options,
+          CustId = @CustId,
+          CustName = @CustName,
+          Flat = @Flat,
+          Address = @Address,
+          Contact = @Contact,
+          DelBoy = @DelBoy,
+          TableId = @TableId,
+          TableNo = @TableNo,
+          Remarks = @Remarks,
+          Total = @Total,
+          Status = @Status
+        WHERE OrderNo = @OrderNo
+      `;
+      
+      await transaction.request()
+        .input("OrderNo", sql.Int, orderNo)
+        .input("EDate", sql.VarChar, date)
+        .input("Time", sql.VarChar, time)
+        .input("Options", sql.Int, option)
+        .input("CustId", sql.Int, finalCustId || 0)
+        .input("CustName", sql.VarChar, custName || "")
+        .input("Flat", sql.VarChar, flatNo || "")
+        .input("Address", sql.VarChar, address || "")
+        .input("Contact", sql.VarChar, contact || "")
+        .input("DelBoy", sql.Int, deliveryBoyId || 0)
+        .input("TableId", sql.Int, tableId || 0)
+        .input("TableNo", sql.VarChar, tableNo || "")
+        .input("Remarks", sql.VarChar, remarks || "")
+        .input("Total", sql.Decimal(18, 2), total || 0)
+        .input("Status", sql.VarChar, orderType)
+        .query(updateOrderMasterQuery);
+
+      // Delete existing order details and printer records
+      await transaction.request()
+        .input("OrderNo", sql.Int, orderNo)
+        .query(`DELETE FROM tblOrder_D WHERE OrderNo = @OrderNo`);
+
+      await transaction.request()
+        .input("OrderNo", sql.Int, orderNo)
+        .query(`DELETE FROM tblPrinter WHERE OrderNo = @OrderNo`);
+
+      // Insert updated order items
+      for (const item of items) {
+        const itemCode = parseInt(item.itemCode) || 0;
+        const slNo = parseInt(item.slNo) || 0;
+        const qty = parseFloat(item.qty) || 0;
+        const rate = parseFloat(item.rate) || 0;
+        const amount = parseFloat(item.amount) || 0;
+        const cost = parseFloat(item.cost) || 0;
+        const vat = parseFloat(item.vat) || 0;
+        const vatAmt = parseFloat(item.vatAmt) || 0;
+        const taxLedger = parseInt(item.taxLedger) || 0;
+
+        console.log(`Updating item: ${item.itemName}, ItemCode: ${itemCode}`);
+
+        const orderDetailQuery = `
+          INSERT INTO tblOrder_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic, Notes)
+          VALUES (@OrderNo, @SlNo, @ItemCode, @ItemName, @Qty, @Rate, @Amount, @Cost, @Vat, @VatAmt, @TaxLedger, @Arabic, @Notes)
+        `;
+        
+        await transaction.request()
+          .input("OrderNo", sql.Int, orderNo)
+          .input("SlNo", sql.Int, slNo)
+          .input("ItemCode", sql.Int, itemCode)
+          .input("ItemName", sql.VarChar, item.itemName || "")
+          .input("Qty", sql.Decimal(18, 2), qty)
+          .input("Rate", sql.Decimal(18, 2), rate)
+          .input("Amount", sql.Decimal(18, 2), amount)
+          .input("Cost", sql.Decimal(18, 2), cost)
+          .input("Vat", sql.Decimal(18, 2), vat)
+          .input("VatAmt", sql.Decimal(18, 2), vatAmt)
+          .input("TaxLedger", sql.Int, taxLedger)
+          .input("Arabic", sql.NVarChar, item.arabic || "")
+          .input("Notes", sql.VarChar, item.notes || "")
+          .query(orderDetailQuery);
+      }
+
+      // Handle updated printer assignments
+      for (const item of items) {
+        const itemCode = parseInt(item.itemCode) || 0;
+        const slNo = parseInt(item.slNo) || 0;
+        const itemId = parseInt(item.itemCode) || 0;
+
+        console.log(`Processing updated printer for item: ${item.itemName}, ItemCode: ${itemCode}`);
+
+        const printerQuery = `
+          SELECT PrinteName FROM tblItemMaster WHERE ItemId = @ItemId
+        `;
+        
+        const printerResult = await transaction.request()
+          .input("ItemId", sql.Int, itemId)
+          .query(printerQuery);
+        
+        const printerName = printerResult.recordset[0]?.PrinteName || "";
+
+        await transaction.request()
+          .input("OrderNo", sql.Int, orderNo)
+          .input("SlNo", sql.Int, slNo)
+          .input("ItemId", sql.Int, itemId)
+          .input("Printer", sql.VarChar, printerName)
+          .query(`
+            INSERT INTO tblPrinter (OrderNo, SlNo, ItemId, Printer)
+            VALUES (@OrderNo, @SlNo, @ItemId, @Printer)
+          `);
+      }
+
+      // Update printer for empty printer names
+      const orderPrinter = process.env.ORDER_PRINTER || "DefaultPrinter";
+      await transaction.request()
+        .input("OrderNo", sql.Int, orderNo)
+        .input("Printer", sql.VarChar, orderPrinter)
+        .query(`
+          UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
+        `);
+
+      // Update table status if changed
+      if (tableId && option === 2) {
+        const seatCheckQuery = `
+          SELECT * FROM tblSeat WHERE TableId = @TableId AND Status = 0
+        `;
+        
+        const seatCheckResult = await transaction.request()
+          .input("TableId", sql.Int, tableId)
+          .query(seatCheckQuery);
+
+        const tableStatus = seatCheckResult.recordset.length > 0 ? 1 : 2;
+        await transaction.request()
+          .input("TableId", sql.Int, tableId)
+          .input("Status", sql.Int, tableStatus)
+          .query(`
+            UPDATE tblTable SET Status = @Status WHERE TableId = @TableId
+          `);
+      }
+
+      savedOrderNo = orderNo;
+
     } else if (status === "KOT") {
       // Update table info in order master
       await transaction.request()
@@ -473,7 +744,7 @@ const processOrder = async ({
         .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
         .input("Options", sql.Int, option)
-        .input("CustId", sql.Int, custId || 0)
+        .input("CustId", sql.Int, finalCustId || 0)  // Use final customer ID
         .input("CustName", sql.VarChar, custName || "")
         .input("Flat", sql.VarChar, flatNo || "")
         .input("Address", sql.VarChar, address || "")
@@ -571,7 +842,7 @@ const processOrder = async ({
         `);
 
     } else {
-      throw createAppError("Invalid status. Must be NEW or KOT.", 400);
+      throw createAppError("Invalid status. Must be NEW, UPDATED, or KOT.", 400);
     }
 
     // Commit the transaction
@@ -581,7 +852,10 @@ const processOrder = async ({
 
     return {
       orderNo: savedOrderNo,
-      message: status === "NEW" ? "Order saved successfully" : "KOT added successfully",
+      custId: finalCustId,
+      message: status === "NEW" ? "Order saved successfully" : 
+               status === "UPDATED" ? "Order updated successfully" : 
+               "KOT added successfully",
     };
   } catch (error) {
     console.error("Transaction error:", error.message);
@@ -672,7 +946,297 @@ const authenticateUser = async (userName, password) => {
     throw createAppError(`Authentication error: ${error.message}`, 500);
   }
 };
+const getAllOrders = async (options = {}) => {
+  try {
+    const connectedPool = await ensureConnection();
 
+    // Updated query with correct column names based on your table structure
+    let query = `
+      SELECT 
+        om.OrderNo,
+        om.EDate,
+        om.Time,
+        om.Options,
+        om.CustId,
+        om.CustName,
+        om.Flat,
+        om.Address,
+        om.Contact,
+        om.DelBoy,
+        om.TableId,
+        om.TableNo,
+        om.Remarks as OrderRemarks,
+        om.Total,
+        om.Saled,
+        om.Status,
+        om.Prefix,
+
+        od.OrderNo as DetailOrderNo,
+        od.SlNo,
+        od.ItemCode,
+        od.ItemName,
+        od.Qty,
+        od.Rate,
+        od.Amount,
+        od.Cost,
+        od.VatAmt,
+        od.TaxLedger,
+        od.Notes as OrderDetailNotes,
+        t.TableId as TableTableId,
+        t.FloorNo,
+        t.Code as TableCode,
+        t.Name as TableName,
+        t.Capacity,
+        t.Remarks as TableRemarks,
+        t.Status as TableStatus
+      FROM dbo.tblOrder_M om
+      LEFT JOIN dbo.tblOrder_D od ON om.OrderNo = od.OrderNo
+      LEFT JOIN dbo.tblTable t ON om.TableId = t.TableId
+    `;
+    
+    const params = [];
+    const conditions = [];
+
+    // Search functionality for OrderNo, CustName, Contact, and Address
+    if (options.search) {
+      conditions.push("(om.OrderNo LIKE @search OR om.CustName LIKE @search OR om.Contact LIKE @search OR om.Address LIKE @search)");
+      params.push({
+        name: "search",
+        type: sql.VarChar,
+        value: `%${options.search}%`,
+      });
+    }
+
+    // Filter by Saled status
+    if (options.saled !== undefined) {
+      conditions.push("om.Saled = @saled");
+      params.push({
+        name: "saled",
+        type: sql.VarChar,
+        value: options.saled,
+      });
+    }
+
+    // Filter by Options
+    if (options.options !== undefined) {
+      conditions.push("om.Options = @options");
+      params.push({
+        name: "options",
+        type: sql.Int,
+        value: options.options,
+      });
+    }
+
+    // Filter by Customer ID if provided
+    if (options.custId !== undefined) {
+      conditions.push("om.CustId = @custId");
+      params.push({
+        name: "custId",
+        type: sql.Int,
+        value: options.custId,
+      });
+    }
+
+    // Filter by Table ID if provided
+    if (options.tableId !== undefined) {
+      conditions.push("om.TableId = @tableId");
+      params.push({
+        name: "tableId",
+        type: sql.Int,
+        value: options.tableId,
+      });
+    }
+
+    // Filter by Status if provided
+    if (options.status !== undefined) {
+      conditions.push("om.Status = @status");
+      params.push({
+        name: "status",
+        type: sql.VarChar,
+        value: options.status,
+      });
+    }
+
+    // Add WHERE clause if conditions exist
+    if (conditions.length > 0) {
+      query += " WHERE " + conditions.join(" AND ");
+    }
+
+    // Order by date (newest first)
+    query += " ORDER BY om.EDate DESC, om.Time DESC";
+
+    // Add pagination if limit is specified
+    if (options.limit && !isNaN(options.limit)) {
+      query += " OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+      params.push({
+        name: "offset",
+        type: sql.Int,
+        value: options.offset || 0,
+      });
+      params.push({
+        name: "limit",
+        type: sql.Int,
+        value: parseInt(options.limit),
+      });
+    }
+
+    const request = connectedPool.request();
+    params.forEach((param) => {
+      request.input(param.name, param.type, param.value);
+    });
+
+    const result = await request.query(query);
+
+    // Group the results to structure order with its details and table info
+    const ordersMap = new Map();
+    
+    result.recordset.forEach(row => {
+      const orderNo = row.OrderNo;
+      
+      if (!ordersMap.has(orderNo)) {
+        // Create order object with table information
+        ordersMap.set(orderNo, {
+          // Order Master fields (tblOrder_M)
+          OrderNo: row.OrderNo,
+          EDate: row.EDate,
+          Time: row.Time,
+          Options: row.Options,
+          CustId: row.CustId,
+          CustName: row.CustName,
+          Flat: row.Flat,
+          Address: row.Address,
+          Contact: row.Contact,
+          DelBoy: row.DelBoy,
+          TableId: row.TableId,
+          TableNo: row.TableNo,
+          OrderRemarks: row.OrderRemarks,
+          Total: row.Total,
+          Saled: row.Saled,
+          Status: row.Status,
+          Prefix: row.Prefix,
+          
+          // Table information (tblTable)
+          tableInfo: row.TableTableId ? {
+            TableId: row.TableTableId,
+            FloorNo: row.FloorNo,
+            TableCode: row.TableCode,
+            TableName: row.TableName,
+            Capacity: row.Capacity,
+            TableRemarks: row.TableRemarks,
+            TableStatus: row.TableStatus
+          } : null,
+          
+          // Order details array (tblOrder_D)
+          orderDetails: []
+        });
+      }
+      
+      // Add order detail if it exists
+      if (row.SlNo) {
+        ordersMap.get(orderNo).orderDetails.push({
+          SlNo: row.SlNo,
+          ItemCode: row.ItemCode,
+          ItemName: row.ItemName,
+          Qty: row.Qty,
+          Rate: row.Rate,
+          Amount: row.Amount,
+          Cost: row.Cost,
+          VatAmt: row.VatAmt,
+          TaxLedger: row.TaxLedger,
+          OrderDetailNotes: row.OrderDetailNotes
+        });
+      }
+    });
+
+    // Convert map to array
+    const orders = Array.from(ordersMap.values());
+
+    return orders;
+  } catch (error) {
+    console.error("Error in getAllOrders:", error.message);
+    throw createAppError(`Error fetching orders: ${error.message}`, 500);
+  }
+};
+
+// Get order by ID
+const getOrderById = async (orderId) => {
+  try {
+    const connectedPool = await ensureConnection();
+
+    const query = "SELECT * FROM tblOrder_M WHERE OrderId = @orderId";
+    const request = connectedPool.request();
+    request.input('orderId', sql.Int, orderId);
+
+    const result = await request.query(query);
+
+    if (result.recordset.length === 0) {
+      throw createAppError('Order not found', 404);
+    }
+
+    return result.recordset[0];
+  } catch (error) {
+    console.error("Error in getOrderById:", error.message);
+    throw createAppError(`Error fetching order: ${error.message}`, 500);
+  }
+};
+
+const getOrderTokenCounts = async () => {
+  try {
+    const connectedPool = await ensureConnection();
+
+    // Query to count orders by Options (this gives us the max count)
+    const query = `
+      SELECT 
+        om.Options,
+        COUNT(*) as MaxCount
+      FROM dbo.tblOrder_M om
+      GROUP BY om.Options
+    `;
+
+    const request = connectedPool.request();
+    const result = await request.query(query);
+
+    // Define option mappings
+    const optionMappings = {
+      1: "Delivery",
+      2: "Dine-In", 
+      3: "Takeaway"
+    };
+
+    // Initialize response object with all categories set to 0
+    const orderCounts = {
+      "Delivery": {
+        optionValue: 1,
+        maxCount: 0,
+        nextToken: 1
+      },
+      "Dine-In": {
+        optionValue: 2,
+        maxCount: 0,
+        nextToken: 1
+      },
+      "Takeaway": {
+        optionValue: 3,
+        maxCount: 0,
+        nextToken: 1
+      }
+    };
+
+    // Update with actual data from database
+    result.recordset.forEach(row => {
+      const optionName = optionMappings[row.Options];
+      if (optionName && orderCounts[optionName]) {
+        orderCounts[optionName].maxCount = row.MaxCount;
+        orderCounts[optionName].nextToken = row.MaxCount + 1;
+      }
+    });
+
+    return orderCounts;
+  } catch (error) {
+    console.error("Error in getOrderTokenCounts:", error.message);
+    throw createAppError(`Error fetching order token counts: ${error.message}`, 500);
+  }
+};
 module.exports = {
   getTableSeatsData,
   getAllItems,
@@ -680,5 +1244,8 @@ module.exports = {
   getAllEmployees,
   processOrder,
   latestOrder,
-  authenticateUser
+  authenticateUser,
+  getAllCustomers,
+  getAllOrders,
+  getOrderTokenCounts
 };
