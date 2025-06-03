@@ -1,0 +1,3 @@
+SHA256: f1f857dacd0430438becca1a5274ed0b8413e27227f43c09da2b07935e32767d
+File: pos_backend.exe
+Date: 2025-05-24T11:48:09.328Z
