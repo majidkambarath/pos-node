@@ -44,6 +44,7 @@ const ensureConnection = async () => {
     throw createAppError(errorMessage, 500);
   }
 };
+
 /**
  * Fetches tables and their associated seats
  * @returns {Array} Array of table objects with nested seats
@@ -104,7 +105,7 @@ const getTableSeatsData = async () => {
 };
 
 /**
- * Gets all items with optional filtering
+ * Gets all items with optional filtering (SQL Server 2008 compatible)
  * @param {Object} options - Filter options (search, grpId, limit, offset)
  * @returns {Array} Array of items
  */
@@ -140,17 +141,31 @@ const getAllItems = async (options = {}) => {
 
     query += " ORDER BY ItemName";
 
+    // SQL Server 2008 compatible pagination using ROW_NUMBER()
     if (options.limit && !isNaN(options.limit)) {
-      query += " OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+      const offset = options.offset || 0;
+      const limit = parseInt(options.limit);
+      
+      query = `
+        WITH PaginatedResults AS (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY ItemName) as RowNum
+          FROM tblItemMaster
+          ${conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''}
+        )
+        SELECT * FROM PaginatedResults 
+        WHERE RowNum > @offset AND RowNum <= @offset + @limit
+        ORDER BY ItemName
+      `;
+      
       params.push({
         name: "offset",
         type: sql.Int,
-        value: options.offset || 0,
+        value: offset,
       });
       params.push({
         name: "limit",
         type: sql.Int,
-        value: parseInt(options.limit),
+        value: limit,
       });
     }
 
@@ -168,6 +183,11 @@ const getAllItems = async (options = {}) => {
   }
 };
 
+/**
+ * Gets all customers with optional filtering (SQL Server 2008 compatible)
+ * @param {Object} options - Filter options (search, limit, offset)
+ * @returns {Array} Array of customers
+ */
 const getAllCustomers = async (options = {}) => {
   try {
     const connectedPool = await ensureConnection();
@@ -186,27 +206,38 @@ const getAllCustomers = async (options = {}) => {
       });
     }
 
-    // Add WHERE clause if conditions exist
     if (conditions.length > 0) {
       query += " WHERE " + conditions.join(" AND ");
     }
 
-    // Order by customer name
-    query += " ORDER BY CustName";
-
-    // Add pagination if limit is specified
+    // SQL Server 2008 compatible pagination using ROW_NUMBER()
     if (options.limit && !isNaN(options.limit)) {
-      query += " OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+      const offset = options.offset || 0;
+      const limit = parseInt(options.limit);
+      
+      query = `
+        WITH PaginatedResults AS (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY CustName) as RowNum
+          FROM tblCustomer
+          ${conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''}
+        )
+        SELECT * FROM PaginatedResults 
+        WHERE RowNum > @offset AND RowNum <= @offset + @limit
+        ORDER BY CustName
+      `;
+      
       params.push({
         name: "offset",
         type: sql.Int,
-        value: options.offset || 0,
+        value: offset,
       });
       params.push({
         name: "limit",
         type: sql.Int,
-        value: parseInt(options.limit),
+        value: limit,
       });
+    } else {
+      query += " ORDER BY CustName";
     }
 
     const request = connectedPool.request();
@@ -222,6 +253,7 @@ const getAllCustomers = async (options = {}) => {
     throw createAppError(`Error fetching customers: ${error.message}`, 500);
   }
 };
+
 /**
  * Gets all categories
  * @returns {Array} Array of category objects
@@ -259,7 +291,7 @@ const getAllEmployees = async () => {
 };
 
 /**
- * Gets the next available order ID
+ * Gets the next available order ID (SQL Server 2008 compatible)
  * @param {Object} transaction - SQL transaction object
  * @returns {Number} Next order ID
  */
@@ -269,11 +301,8 @@ const getMaxOrderId = async (transaction) => {
   return result.recordset[0].MaxId;
 };
 
-/**
- * Process an order (new or KOT)
- * @param {Object} orderData - Order details and items
- * @returns {Object} Result with order number and status message
- */
+
+
 const processOrder = async ({
   orderNo,
   status,
@@ -353,6 +382,7 @@ const processOrder = async ({
         // Customer doesn't exist - create new customer
         console.log("Customer not found, creating new customer");
         
+        // SQL Server 2008 compatible - Use @@IDENTITY instead of SCOPE_IDENTITY() in SELECT
         const newCustomerQuery = `
           INSERT INTO dbo.tblCustomer (
             CustName, Add1, Add2, Add3, ContactNo, Phone, Fax, Email, 
@@ -363,17 +393,28 @@ const processOrder = async ({
             @CustName, @Add1, NULL, NULL, @ContactNo, @Phone, @Fax, NULL,
             0, 0.00, NULL, 1, 0,
             NULL, NULL, NULL, NULL, 0, NULL, NULL
-          );
-          SELECT SCOPE_IDENTITY() AS CustCode;
+          )
+        `;
+        
+        await transaction.request()
+          .input("CustName", sql.VarChar, custName)
+          .input("Add1", sql.VarChar, address || flatNo || "")
+          .input("ContactNo", sql.VarChar, contact)
+          .input("Phone", sql.VarChar, contact)
+          .input("Fax", sql.VarChar, flatNo || "")
+          .query(newCustomerQuery);
+        
+        // Get the inserted customer ID using separate query
+        const getNewCustomerIdQuery = `
+          SELECT CustCode FROM dbo.tblCustomer 
+          WHERE Phone = @Phone AND CustName = @CustName 
+          ORDER BY CustCode DESC
         `;
         
         const newCustomerResult = await transaction.request()
-          .input("CustName", sql.VarChar, custName)
-          .input("Add1", sql.VarChar, address || flatNo || "")  // Use address or flatNo for Add1
-          .input("ContactNo", sql.VarChar, contact)
           .input("Phone", sql.VarChar, contact)
-          .input("Fax", sql.VarChar, flatNo || "")  // Store flat number in fax field as requested
-          .query(newCustomerQuery);
+          .input("CustName", sql.VarChar, custName)
+          .query(getNewCustomerIdQuery);
         
         finalCustId = newCustomerResult.recordset[0].CustCode;
         console.log("New customer created with ID:", finalCustId);
@@ -388,15 +429,14 @@ const processOrder = async ({
       // Insert order master with final customer ID
       const orderMasterQuery = `
         INSERT INTO tblOrder_M (EDate, Time, Options, CustId, CustName, Flat, Address, Contact, DelBoy, TableId, TableNo, Remarks, Total, Saled, Status, Prefix, Pr)
-        VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr);
-        SELECT SCOPE_IDENTITY() AS OrderNo;
+        VALUES (@EDate, @Time, @Options, @CustId, @CustName, @Flat, @Address, @Contact, @DelBoy, @TableId, @TableNo, @Remarks, @Total, 'No', @Status, @Prefix, @Pr)
       `;
       
-      const orderMasterRequest = transaction.request()
+      await transaction.request()
         .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
         .input("Options", sql.Int, option)
-        .input("CustId", sql.Int, finalCustId || 0)  // Use final customer ID
+        .input("CustId", sql.Int, finalCustId || 0)
         .input("CustName", sql.VarChar, custName || "")
         .input("Flat", sql.VarChar, flatNo || "")
         .input("Address", sql.VarChar, address || "")
@@ -408,10 +448,23 @@ const processOrder = async ({
         .input("Total", sql.Decimal(18, 2), total || 0)
         .input("Status", sql.VarChar, orderType)
         .input("Prefix", sql.VarChar, prefix || "")
-        .input("Pr", sql.VarChar, prefix ? `${prefix}${newOrderNo}` : "");
+        .input("Pr", sql.VarChar, prefix ? `${prefix}${newOrderNo}` : "")
+        .query(orderMasterQuery);
       
-      const orderMasterResult = await orderMasterRequest.query(orderMasterQuery);
-      savedOrderNo = orderMasterResult.recordset[0].OrderNo;
+      // Get the inserted order number using separate query
+      const getOrderNoQuery = `
+        SELECT OrderNo FROM tblOrder_M 
+        WHERE EDate = @EDate AND Time = @Time AND CustId = @CustId 
+        ORDER BY OrderNo DESC
+      `;
+      
+      const orderNoResult = await transaction.request()
+        .input("EDate", sql.VarChar, date)
+        .input("Time", sql.VarChar, time)
+        .input("CustId", sql.Int, finalCustId || 0)
+        .query(getOrderNoQuery);
+      
+      savedOrderNo = orderNoResult.recordset[0].OrderNo;
 
       // Process order items
       for (const item of items) {
@@ -744,7 +797,7 @@ const processOrder = async ({
         .input("EDate", sql.VarChar, date)
         .input("Time", sql.VarChar, time)
         .input("Options", sql.Int, option)
-        .input("CustId", sql.Int, finalCustId || 0)  // Use final customer ID
+        .input("CustId", sql.Int, finalCustId || 0)
         .input("CustName", sql.VarChar, custName || "")
         .input("Flat", sql.VarChar, flatNo || "")
         .input("Address", sql.VarChar, address || "")
@@ -912,6 +965,7 @@ const latestOrder = async () => {
   }
 };
 
+
 /**
  * Authenticates a user
  * @param {String} userName - Username
@@ -946,11 +1000,12 @@ const authenticateUser = async (userName, password) => {
     throw createAppError(`Authentication error: ${error.message}`, 500);
   }
 };
+
 const getAllOrders = async (options = {}) => {
   try {
     const connectedPool = await ensureConnection();
 
-    // Updated query with correct column names based on your table structure
+    // Base query with joins
     let query = `
       SELECT 
         om.OrderNo,
@@ -1062,22 +1117,110 @@ const getAllOrders = async (options = {}) => {
       query += " WHERE " + conditions.join(" AND ");
     }
 
-    // Order by date (newest first)
-    query += " ORDER BY om.EDate DESC, om.Time DESC";
-
-    // Add pagination if limit is specified
+    // SQL Server 2008 Compatible Pagination using ROW_NUMBER()
     if (options.limit && !isNaN(options.limit)) {
-      query += " OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+      const offset = options.offset || 0;
+      const limit = parseInt(options.limit);
+      
+      // Wrap the original query with ROW_NUMBER() for pagination
+      query = `
+        WITH OrderedResults AS (
+          SELECT 
+            ROW_NUMBER() OVER (ORDER BY om.EDate DESC, om.Time DESC) as RowNum,
+            om.OrderNo,
+            om.EDate,
+            om.Time,
+            om.Options,
+            om.CustId,
+            om.CustName,
+            om.Flat,
+            om.Address,
+            om.Contact,
+            om.DelBoy,
+            om.TableId,
+            om.TableNo,
+            om.Remarks as OrderRemarks,
+            om.Total,
+            om.Saled,
+            om.Status,
+            om.Prefix,
+
+            od.OrderNo as DetailOrderNo,
+            od.SlNo,
+            od.ItemCode,
+            od.ItemName,
+            od.Qty,
+            od.Rate,
+            od.Amount,
+            od.Cost,
+            od.VatAmt,
+            od.TaxLedger,
+            od.Notes as OrderDetailNotes,
+            t.TableId as TableTableId,
+            t.FloorNo,
+            t.Code as TableCode,
+            t.Name as TableName,
+            t.Capacity,
+            t.Remarks as TableRemarks,
+            t.Status as TableStatus
+          FROM dbo.tblOrder_M om
+          LEFT JOIN dbo.tblOrder_D od ON om.OrderNo = od.OrderNo
+          LEFT JOIN dbo.tblTable t ON om.TableId = t.TableId
+          ${conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : ""}
+        )
+        SELECT 
+          OrderNo,
+          EDate,
+          Time,
+          Options,
+          CustId,
+          CustName,
+          Flat,
+          Address,
+          Contact,
+          DelBoy,
+          TableId,
+          TableNo,
+          OrderRemarks,
+          Total,
+          Saled,
+          Status,
+          Prefix,
+          DetailOrderNo,
+          SlNo,
+          ItemCode,
+          ItemName,
+          Qty,
+          Rate,
+          Amount,
+          Cost,
+          VatAmt,
+          TaxLedger,
+          OrderDetailNotes,
+          TableTableId,
+          FloorNo,
+          TableCode,
+          TableName,
+          Capacity,
+          TableRemarks,
+          TableStatus
+        FROM OrderedResults 
+        WHERE RowNum > @offset AND RowNum <= @endRow
+      `;
+      
       params.push({
         name: "offset",
         type: sql.Int,
-        value: options.offset || 0,
+        value: offset,
       });
       params.push({
-        name: "limit",
+        name: "endRow",
         type: sql.Int,
-        value: parseInt(options.limit),
+        value: offset + limit,
       });
+    } else {
+      // No pagination - just add ORDER BY
+      query += " ORDER BY om.EDate DESC, om.Time DESC";
     }
 
     const request = connectedPool.request();
@@ -1237,6 +1380,7 @@ const getOrderTokenCounts = async () => {
     throw createAppError(`Error fetching order token counts: ${error.message}`, 500);
   }
 };
+
 module.exports = {
   getTableSeatsData,
   getAllItems,
