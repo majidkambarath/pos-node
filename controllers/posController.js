@@ -129,6 +129,7 @@ const latestOrder = async (req, res, next) => {
 
 const saveOrder = async (req, res, next) => {
   try {
+   
     const {
       orderNo,
       status,
@@ -143,6 +144,7 @@ const saveOrder = async (req, res, next) => {
       deliveryBoyId,
       tableId,
       tableNo,
+      selectedSeats,
       remarks,
       total,
       prefix,
@@ -197,6 +199,7 @@ const saveOrder = async (req, res, next) => {
       address,
       contact,
       deliveryBoyId,
+      selectedSeats,
       tableId,
       tableNo,
       remarks,

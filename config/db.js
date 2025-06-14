@@ -134,6 +134,236 @@ const createConfig = () => {
   return config;
 };
 
+// Schema setup and validation class
+class SchemaManager {
+  constructor(pool) {
+    this.pool = pool;
+  }
+
+  // Check if a column exists in a table
+  async columnExists(tableName, columnName) {
+    try {
+      const query = `
+        SELECT COUNT(*) as ColumnCount
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = @tableName 
+        AND COLUMN_NAME = @columnName
+        AND TABLE_SCHEMA = 'dbo'
+      `;
+      
+      const request = this.pool.request();
+      request.input('tableName', sql.NVarChar(128), tableName);
+      request.input('columnName', sql.NVarChar(128), columnName);
+      
+      const result = await request.query(query);
+      return result.recordset[0].ColumnCount > 0;
+    } catch (error) {
+      console.error(`❌ Error checking column existence: ${error.message}`);
+      return false;
+    }
+  }
+
+  // Check if a table exists
+  async tableExists(tableName) {
+    try {
+      const query = `
+        SELECT COUNT(*) as TableCount
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = @tableName 
+        AND TABLE_SCHEMA = 'dbo'
+        AND TABLE_TYPE = 'BASE TABLE'
+      `;
+      
+      const request = this.pool.request();
+      request.input('tableName', sql.NVarChar(128), tableName);
+      
+      const result = await request.query(query);
+      return result.recordset[0].TableCount > 0;
+    } catch (error) {
+      console.error(`❌ Error checking table existence: ${error.message}`);
+      return false;
+    }
+  }
+
+  // Check if foreign key constraint exists
+  async foreignKeyExists(constraintName) {
+    try {
+      const query = `
+        SELECT COUNT(*) as ConstraintCount
+        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS 
+        WHERE CONSTRAINT_NAME = @constraintName 
+        AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+      `;
+      
+      const request = this.pool.request();
+      request.input('constraintName', sql.NVarChar(128), constraintName);
+      
+      const result = await request.query(query);
+      return result.recordset[0].ConstraintCount > 0;
+    } catch (error) {
+      console.error(`❌ Error checking foreign key existence: ${error.message}`);
+      return false;
+    }
+  }
+
+  // Add SeatId column to OrderM table
+  async addSeatIdToOrderM() {
+    try {
+      console.log("🔍 Checking OrderM table schema...");
+
+      // Check if OrderM table exists
+      const orderMExists = await this.tableExists('tblOrder_M');
+      if (!orderMExists) {
+        console.log("⚠️  OrderM table (tblOrder_M) does not exist. Skipping SeatId column addition.");
+        return false;
+      }
+
+      // Check if Seat table exists
+      const seatExists = await this.tableExists('tblSeat');
+      if (!seatExists) {
+        console.log("⚠️  Seat table (tblSeat) does not exist. Cannot create foreign key reference.");
+        return false;
+      }
+
+      // Check if SeatId column already exists
+      const seatIdExists = await this.columnExists('tblOrder_M', 'SeatId');
+      if (seatIdExists) {
+        console.log("✅ SeatId column already exists in OrderM table");
+        
+        // Check if foreign key constraint exists
+        const fkExists = await this.foreignKeyExists('FK_OrderM_Seat');
+        if (!fkExists) {
+          console.log("🔧 Adding missing foreign key constraint...");
+          await this.addForeignKeyConstraint();
+        }
+        
+        return true;
+      }
+
+      console.log("🔧 Adding SeatId column to OrderM table...");
+
+      // Add the SeatId column
+      const addColumnQuery = `
+        ALTER TABLE dbo.tblOrder_M 
+        ADD SeatId INT NULL
+      `;
+
+      await this.pool.request().query(addColumnQuery);
+      console.log("✅ SeatId column added successfully");
+
+      // Add foreign key constraint
+      await this.addForeignKeyConstraint();
+
+      // Add index for better performance
+      await this.addSeatIdIndex();
+
+      console.log("✅ SeatId setup completed successfully");
+      return true;
+
+    } catch (error) {
+      console.error("❌ Error adding SeatId column:", error.message);
+      
+      // Provide specific error handling
+      if (error.message.includes('already exists')) {
+        console.log("ℹ️  Column already exists, continuing...");
+        return true;
+      }
+      
+      throw error;
+    }
+  }
+
+  // Add foreign key constraint
+  async addForeignKeyConstraint() {
+    try {
+      // Check if constraint already exists
+      const fkExists = await this.foreignKeyExists('FK_OrderM_Seat');
+      if (fkExists) {
+        console.log("✅ Foreign key constraint already exists");
+        return;
+      }
+
+      const fkQuery = `
+        ALTER TABLE dbo.tblOrder_M 
+        ADD CONSTRAINT FK_OrderM_Seat 
+        FOREIGN KEY (SeatId) 
+        REFERENCES dbo.tblSeat(SeatId)
+        ON DELETE SET NULL
+        ON UPDATE CASCADE
+      `;
+
+      await this.pool.request().query(fkQuery);
+      console.log("✅ Foreign key constraint added successfully");
+
+    } catch (error) {
+      console.error("❌ Error adding foreign key constraint:", error.message);
+      
+      // Don't throw error for constraint issues, just log
+      if (error.message.includes('already exists') || 
+          error.message.includes('FK_OrderM_Seat')) {
+        console.log("ℹ️  Foreign key constraint issue resolved");
+      } else {
+        console.log("⚠️  Foreign key constraint could not be added, but column is available");
+      }
+    }
+  }
+
+  // Add index for SeatId column
+  async addSeatIdIndex() {
+    try {
+      const indexQuery = `
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_OrderM_SeatId')
+        BEGIN
+          CREATE NONCLUSTERED INDEX IX_OrderM_SeatId 
+          ON dbo.tblOrder_M (SeatId)
+          WHERE SeatId IS NOT NULL
+        END
+      `;
+
+      await this.pool.request().query(indexQuery);
+      console.log("✅ SeatId index added successfully");
+
+    } catch (error) {
+      console.error("❌ Error adding SeatId index:", error.message);
+      // Index creation failure is not critical
+    }
+  }
+
+  // Get schema information
+  async getSchemaInfo() {
+    try {
+      const query = `
+        SELECT 
+          t.TABLE_NAME,
+          c.COLUMN_NAME,
+          c.DATA_TYPE,
+          c.IS_NULLABLE,
+          c.COLUMN_DEFAULT,
+          CASE 
+            WHEN tc.CONSTRAINT_TYPE = 'PRIMARY KEY' THEN 'PK'
+            WHEN tc.CONSTRAINT_TYPE = 'FOREIGN KEY' THEN 'FK'
+            WHEN tc.CONSTRAINT_TYPE = 'UNIQUE' THEN 'UQ'
+            ELSE ''
+          END as CONSTRAINT_TYPE
+        FROM INFORMATION_SCHEMA.TABLES t
+        LEFT JOIN INFORMATION_SCHEMA.COLUMNS c ON t.TABLE_NAME = c.TABLE_NAME
+        LEFT JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu ON c.TABLE_NAME = kcu.TABLE_NAME AND c.COLUMN_NAME = kcu.COLUMN_NAME
+        LEFT JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+        WHERE t.TABLE_NAME IN ('tblOrder_M', 'tblSeat')
+        AND t.TABLE_SCHEMA = 'dbo'
+        ORDER BY t.TABLE_NAME, c.ORDINAL_POSITION
+      `;
+
+      const result = await this.pool.request().query(query);
+      return result.recordset;
+
+    } catch (error) {
+      console.error("❌ Error getting schema info:", error.message);
+      return [];
+    }
+  }
+}
+
 // Connection state management
 class DatabaseManager {
   constructor() {
@@ -143,6 +373,8 @@ class DatabaseManager {
     this.config = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = parseInt(process.env.DB_MAX_RECONNECT_ATTEMPTS || "5");
+    this.schemaManager = null;
+    this.schemaInitialized = false;
   }
 
   async initialize() {
@@ -199,7 +431,12 @@ class DatabaseManager {
           console.log("✅ SQL Server 2008 connection verified");
 
           this.pool = pool;
+          this.schemaManager = new SchemaManager(pool);
           this.isConnecting = false;
+
+          // Initialize schema after successful connection
+          await this._initializeSchema();
+
           return pool;
 
         } catch (error) {
@@ -219,6 +456,49 @@ class DatabaseManager {
       this._logTroubleshootingTips(error);
       
       throw error;
+    }
+  }
+
+  // Initialize database schema
+  async _initializeSchema() {
+    if (this.schemaInitialized || !this.schemaManager) {
+      return;
+    }
+
+    try {
+      console.log("🔧 Initializing database schema...");
+
+      // Setup SeatId column in OrderM table
+      await this.schemaManager.addSeatIdToOrderM();
+
+      // Log schema information
+      const schemaInfo = await this.schemaManager.getSchemaInfo();
+      if (schemaInfo.length > 0) {
+        console.log("📋 Current schema information:");
+        
+        const orderMCols = schemaInfo.filter(s => s.TABLE_NAME === 'tblOrder_M');
+        const seatCols = schemaInfo.filter(s => s.TABLE_NAME === 'tblSeat');
+        
+        if (orderMCols.length > 0) {
+          console.log("   📊 OrderM columns:", orderMCols.map(c => c.COLUMN_NAME).join(', '));
+          const seatIdCol = orderMCols.find(c => c.COLUMN_NAME === 'SeatId');
+          if (seatIdCol) {
+            console.log(`   ✅ SeatId column: ${seatIdCol.DATA_TYPE}, nullable: ${seatIdCol.IS_NULLABLE}`);
+          }
+        }
+        
+        if (seatCols.length > 0) {
+          console.log("   💺 Seat columns:", seatCols.map(c => c.COLUMN_NAME).join(', '));
+        }
+      }
+
+      this.schemaInitialized = true;
+      console.log("✅ Schema initialization completed");
+
+    } catch (error) {
+      console.error("❌ Schema initialization failed:", error.message);
+      // Don't throw error - connection should still work
+      console.log("⚠️  Continuing without schema setup...");
     }
   }
 
@@ -304,6 +584,7 @@ class DatabaseManager {
 
     try {
       await this.close();
+      this.schemaInitialized = false; // Reset schema flag
       await this.initialize();
       console.log("✅ Reconnection successful");
     } catch (error) {
@@ -376,7 +657,8 @@ class DatabaseManager {
       integratedSecurity: this.config.options?.integratedSecurity || false,
       sqlServerVersion: 'SQL Server 2008 Compatible',
       connectionTimeout: this.config.options?.connectTimeout,
-      requestTimeout: this.config.options?.requestTimeout
+      requestTimeout: this.config.options?.requestTimeout,
+      schemaInitialized: this.schemaInitialized
     };
   }
 
@@ -392,6 +674,8 @@ class DatabaseManager {
     this.connectionPromise = null;
     this.isConnecting = false;
     this.reconnectAttempts = 0;
+    this.schemaManager = null;
+    this.schemaInitialized = false;
   }
 
   // SQL Server 2008 specific helper methods
@@ -422,6 +706,19 @@ class DatabaseManager {
       return "Error retrieving version";
     }
   }
+
+  // Get schema manager
+  getSchemaManager() {
+    return this.schemaManager;
+  }
+
+  // Manual schema re-initialization
+  async reinitializeSchema() {
+    this.schemaInitialized = false;
+    if (this.schemaManager) {
+      await this._initializeSchema();
+    }
+  }
 }
 
 // Create singleton instance
@@ -446,6 +743,8 @@ module.exports = {
   close: () => dbManager.close(),
   executeQuery: (query, params) => dbManager.executeQuery(query, params),
   getSqlServerVersion: () => dbManager.getSqlServerVersion(),
+  getSchemaManager: () => dbManager.getSchemaManager(),
+  reinitializeSchema: () => dbManager.reinitializeSchema(),
   
   // Helper function to ensure connection for backward compatibility
   ensureConnection: async () => {

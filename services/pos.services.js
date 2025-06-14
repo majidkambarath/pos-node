@@ -322,6 +322,7 @@ const processOrder = async ({
   prefix,
   items,
   holdedOrder,
+  selectedSeats
 }) => {
   let transaction;
   let savedOrderNo = orderNo;
@@ -336,6 +337,7 @@ const processOrder = async ({
       itemsCount: items?.length || 0,
       contact,
       custName,
+      selectedSeats: selectedSeats?.length || 0,
     });
     
     // Parse numeric values
@@ -544,40 +546,92 @@ const processOrder = async ({
           UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
         `);
 
-      // Handle dine-in specific logic
+      // Handle dine-in specific logic and selected seats
       if (option === 2) {
-        const counterName = process.env.COUNTER_NAME || "DefaultCounter";
-        const seatsQuery = `
-          SELECT Seat, SeatId, TableId, Status, Counter FROM tblTemp_Seats WHERE Counter = @Counter
-        `;
-        
-        const seatsResult = await transaction.request()
-          .input("Counter", sql.VarChar, counterName)
-          .query(seatsQuery);
+        // Handle selected seats if provided
+        if (selectedSeats && Array.isArray(selectedSeats) && selectedSeats.length > 0) {
+          console.log("Processing selected seats:", selectedSeats);
+          
+          // Update status to 1 for selected seats
+          for (const seatId of selectedSeats) {
+            const parsedSeatId = parseInt(seatId);
+            if (parsedSeatId && parsedSeatId > 0) {
+              console.log(`Updating seat status for SeatId: ${parsedSeatId}`);
+              
+              await transaction.request()
+                .input("SeatId", sql.Int, parsedSeatId)
+                .input("TableId", sql.Int, tableId || 0)
+                .query(`
+                  UPDATE tblSeat 
+                  SET Status = 1 
+                  WHERE SeatId = @SeatId AND TableId = @TableId
+                `);
 
-        for (const seat of seatsResult.recordset) {
-          await transaction.request()
-            .input("OrderNo", sql.Int, savedOrderNo)
-            .input("Seat", sql.VarChar, seat.Seat)
-            .input("SeatId", sql.Int, seat.SeatId)
-            .input("TableId", sql.Int, seat.TableId)
+              // Also insert into tblOrder_Seats for tracking
+              const counterName = process.env.COUNTER_NAME || "DefaultCounter";
+              
+              // Get seat details first
+              const seatDetailsQuery = `
+                SELECT Seat, SeatId, TableId FROM tblSeat 
+                WHERE SeatId = @SeatId AND TableId = @TableId
+              `;
+              
+              const seatDetailsResult = await transaction.request()
+                .input("SeatId", sql.Int, parsedSeatId)
+                .input("TableId", sql.Int, tableId || 0)
+                .query(seatDetailsQuery);
+
+              if (seatDetailsResult.recordset.length > 0) {
+                const seatDetails = seatDetailsResult.recordset[0];
+                
+                await transaction.request()
+                  .input("OrderNo", sql.Int, savedOrderNo)
+                  .input("Seat", sql.VarChar, seatDetails.Seat)
+                  .input("SeatId", sql.Int, seatDetails.SeatId)
+                  .input("TableId", sql.Int, seatDetails.TableId)
+                  .input("Counter", sql.VarChar, counterName)
+                  .query(`
+                    INSERT INTO tblOrder_Seats (OrderNo, Seat, SeatId, TableId, Status, Counter)
+                    VALUES (@OrderNo, @Seat, @SeatId, @TableId, 0, @Counter)
+                  `);
+              }
+            }
+          }
+        } else {
+          // Original logic for temp seats (fallback)
+          const counterName = process.env.COUNTER_NAME || "DefaultCounter";
+          const seatsQuery = `
+            SELECT Seat, SeatId, TableId, Status, Counter FROM tblTemp_Seats WHERE Counter = @Counter
+          `;
+          
+          const seatsResult = await transaction.request()
             .input("Counter", sql.VarChar, counterName)
-            .query(`
-              INSERT INTO tblOrder_Seats (OrderNo, Seat, SeatId, TableId, Status, Counter)
-              VALUES (@OrderNo, @Seat, @SeatId, @TableId, 0, @Counter)
-            `);
+            .query(seatsQuery);
+
+          for (const seat of seatsResult.recordset) {
+            await transaction.request()
+              .input("OrderNo", sql.Int, savedOrderNo)
+              .input("Seat", sql.VarChar, seat.Seat)
+              .input("SeatId", sql.Int, seat.SeatId)
+              .input("TableId", sql.Int, seat.TableId)
+              .input("Counter", sql.VarChar, counterName)
+              .query(`
+                INSERT INTO tblOrder_Seats (OrderNo, Seat, SeatId, TableId, Status, Counter)
+                VALUES (@OrderNo, @Seat, @SeatId, @TableId, 0, @Counter)
+              `);
+
+            await transaction.request()
+              .input("SeatId", sql.Int, seat.SeatId)
+              .input("TableId", sql.Int, seat.TableId)
+              .query(`
+                UPDATE tblSeat SET Status = 1 WHERE SeatId = @SeatId AND TableId = @TableId
+              `);
+          }
 
           await transaction.request()
-            .input("SeatId", sql.Int, seat.SeatId)
-            .input("TableId", sql.Int, seat.TableId)
-            .query(`
-              UPDATE tblSeat SET Status = 1 WHERE SeatId = @SeatId AND TableId = @TableId
-            `);
+            .input("Counter", sql.VarChar, counterName)
+            .query(`DELETE FROM tblTemp_Seats WHERE Counter = @Counter`);
         }
-
-        await transaction.request()
-          .input("Counter", sql.VarChar, counterName)
-          .query(`DELETE FROM tblTemp_Seats WHERE Counter = @Counter`);
       }
 
       // Update table status for dine-in
@@ -746,6 +800,74 @@ const processOrder = async ({
           UPDATE tblPrinter SET Printer = @Printer WHERE Printer = '' AND OrderNo = @OrderNo
         `);
 
+      // Handle selected seats for updated orders (dine-in)
+      if (option === 2 && selectedSeats && Array.isArray(selectedSeats) && selectedSeats.length > 0) {
+        console.log("Processing selected seats for updated order:", selectedSeats);
+        
+        // First, reset all seats for this table to status 0 (available)
+        if (tableId) {
+          await transaction.request()
+            .input("TableId", sql.Int, tableId)
+            .query(`
+              UPDATE tblSeat SET Status = 0 WHERE TableId = @TableId
+            `);
+        }
+
+        // Then update only the selected seats to status 1 (occupied)
+        for (const seatId of selectedSeats) {
+          const parsedSeatId = parseInt(seatId);
+          if (parsedSeatId && parsedSeatId > 0) {
+            console.log(`Updating seat status for SeatId: ${parsedSeatId}`);
+            
+            await transaction.request()
+              .input("SeatId", sql.Int, parsedSeatId)
+              .input("TableId", sql.Int, tableId || 0)
+              .query(`
+                UPDATE tblSeat 
+                SET Status = 1 
+                WHERE SeatId = @SeatId AND TableId = @TableId
+              `);
+          }
+        }
+
+        // Update tblOrder_Seats for tracking
+        await transaction.request()
+          .input("OrderNo", sql.Int, orderNo)
+          .query(`DELETE FROM tblOrder_Seats WHERE OrderNo = @OrderNo`);
+
+        const counterName = process.env.COUNTER_NAME || "DefaultCounter";
+        for (const seatId of selectedSeats) {
+          const parsedSeatId = parseInt(seatId);
+          if (parsedSeatId && parsedSeatId > 0) {
+            // Get seat details
+            const seatDetailsQuery = `
+              SELECT Seat, SeatId, TableId FROM tblSeat 
+              WHERE SeatId = @SeatId AND TableId = @TableId
+            `;
+            
+            const seatDetailsResult = await transaction.request()
+              .input("SeatId", sql.Int, parsedSeatId)
+              .input("TableId", sql.Int, tableId || 0)
+              .query(seatDetailsQuery);
+
+            if (seatDetailsResult.recordset.length > 0) {
+              const seatDetails = seatDetailsResult.recordset[0];
+              
+              await transaction.request()
+                .input("OrderNo", sql.Int, orderNo)
+                .input("Seat", sql.VarChar, seatDetails.Seat)
+                .input("SeatId", sql.Int, seatDetails.SeatId)
+                .input("TableId", sql.Int, seatDetails.TableId)
+                .input("Counter", sql.VarChar, counterName)
+                .query(`
+                  INSERT INTO tblOrder_Seats (OrderNo, Seat, SeatId, TableId, Status, Counter)
+                  VALUES (@OrderNo, @Seat, @SeatId, @TableId, 0, @Counter)
+                `);
+            }
+          }
+        }
+      }
+
       // Update table status if changed
       if (tableId && option === 2) {
         const seatCheckQuery = `
@@ -777,8 +899,28 @@ const processOrder = async ({
           UPDATE tblOrder_M SET TableId = @TableId, TableNo = @TableNo WHERE OrderNo = @OrderNo
         `);
 
-      // Update table status
-      if (tableId) {
+      // Handle selected seats for KOT orders
+      if (selectedSeats && Array.isArray(selectedSeats) && selectedSeats.length > 0) {
+        console.log("Processing selected seats for KOT:", selectedSeats);
+        
+        // Update status to 1 for selected seats
+        for (const seatId of selectedSeats) {
+          const parsedSeatId = parseInt(seatId);
+          if (parsedSeatId && parsedSeatId > 0) {
+            console.log(`Updating seat status for KOT SeatId: ${parsedSeatId}`);
+            
+            await transaction.request()
+              .input("SeatId", sql.Int, parsedSeatId)
+              .input("TableId", sql.Int, tableId || 0)
+              .query(`
+                UPDATE tblSeat 
+                SET Status = 1 
+                WHERE SeatId = @SeatId AND TableId = @TableId
+              `);
+          }
+        }
+      } else if (tableId) {
+        // Fallback: Update table status
         await transaction.request()
           .input("TableId", sql.Int, tableId)
           .query(`
