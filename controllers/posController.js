@@ -58,7 +58,7 @@ const getPendingOrders = async (req, res, next) => {
     const { search, limit, offset } = req.query;
     const orders = await posServices.getAllOrders({
       search,
-      saled: 'no',
+      saled: "no",
       options: 2,
       limit: limit ? parseInt(limit) : undefined,
       offset: offset ? parseInt(offset) : 0,
@@ -99,7 +99,7 @@ const getOrderTokenCounts = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-}
+};
 const getAllEmployees = async (req, res, next) => {
   try {
     const employees = await posServices.getAllEmployees();
@@ -129,6 +129,7 @@ const latestOrder = async (req, res, next) => {
 
 const saveOrder = async (req, res, next) => {
   try {
+   
     const {
       orderNo,
       status,
@@ -143,13 +144,13 @@ const saveOrder = async (req, res, next) => {
       deliveryBoyId,
       tableId,
       tableNo,
+      selectedSeats,
       remarks,
       total,
       prefix,
       items,
       holdedOrder,
     } = req.body;
-
     if (!orderNo || orderNo === "0") {
       return res.status(400).json({
         success: false,
@@ -197,6 +198,7 @@ const saveOrder = async (req, res, next) => {
       address,
       contact,
       deliveryBoyId,
+      selectedSeats,
       tableId,
       tableNo,
       remarks,
@@ -249,5 +251,5 @@ module.exports = {
   authLogin,
   getAllCustomers,
   getPendingOrders,
-  getOrderTokenCounts
+  getOrderTokenCounts,
 };

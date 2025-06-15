@@ -14,6 +14,7 @@ const {
 
 const router = express.Router();
 
+
 router.get("/tables-seats", getTableSeats);
 router.get("/items", getAllItems);
 router.get("/customers", getAllCustomers);
@@ -24,5 +25,6 @@ router.get("/token-counts",getOrderTokenCounts );
 router.post("/orders", saveOrder);
 router.get("/order/latest", latestOrder);
 router.post("/login", authLogin);
+
 
 module.exports = router;
