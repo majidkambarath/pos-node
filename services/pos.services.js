@@ -55,10 +55,16 @@ const getTableSeatsData = async () => {
 
     const query = `
       SELECT 
-        t.*, 
+        t.TableID,
+        t.FloorNo,
+        t.Code,
+        t.Name,
+        t.Capacity,
+        t.Remarks as TableRemarks,
+        t.Status as TableStatus,
         s.SeatId, 
         s.Seat AS SeatName,
-        s.remarks, 
+        s.remarks as SeatRemarks, 
         s.Status AS SeatStatus
       FROM 
         tblTable t
@@ -74,22 +80,29 @@ const getTableSeatsData = async () => {
     const tableMap = new Map();
 
     result.recordset.forEach((row) => {
+      // If table doesn't exist in map, create it
       if (!tableMap.has(row.TableID)) {
-        const tableData = { ...row };
-        delete tableData.SeatId;
-        delete tableData.SeatName;
-        delete tableData.remarks;
-        delete tableData.SeatStatus;
-        tableData.seats = [];
+        const tableData = {
+          TableID: row.TableID,
+          FloorNo: row.FloorNo,
+          Code: row.Code,
+          Name: row.Name,
+          Capacity: row.Capacity,
+          Remarks: row.TableRemarks,
+          Status: row.TableStatus,
+          seats: [],
+        };
+
         tables.push(tableData);
         tableMap.set(row.TableID, tableData);
       }
 
-      if (row.SeatId) {
+      // Add seat data if seat exists (LEFT JOIN might return null seats)
+      if (row.SeatId !== null && row.SeatId !== undefined) {
         const seat = {
           SeatId: row.SeatId,
           SeatName: row.SeatName,
-          remarks: row.remarks,
+          Remarks: row.SeatRemarks,
           Status: row.SeatStatus,
         };
 
@@ -97,9 +110,129 @@ const getTableSeatsData = async () => {
       }
     });
 
+    // Optional: Add summary information
+    tables.forEach((table) => {
+      table.TotalSeats = table.seats.length;
+      table.AvailableSeats = table.seats.filter(
+        (seat) => seat.Status === 0
+      ).length;
+      table.OccupiedSeats = table.seats.filter(
+        (seat) => seat.Status === 1
+      ).length;
+    });
+
     return tables;
   } catch (error) {
     console.error("Error in getTableSeatsData:", error.message);
+    throw createAppError(`Error fetching table seats: ${error.message}`, 500);
+  }
+};
+
+// Alternative version with more explicit column selection and validation
+const getTableSeatsDataWithValidation = async () => {
+  try {
+    const connectedPool = await ensureConnection();
+
+    // First, let's validate our table structure
+    const tableQuery = `SELECT COUNT(*) as TableCount FROM tblTable`;
+    const seatQuery = `SELECT COUNT(*) as SeatCount FROM tblSeat`;
+
+    const tableCount = await connectedPool.request().query(tableQuery);
+    const seatCount = await connectedPool.request().query(seatQuery);
+
+    console.log(
+      `Found ${tableCount.recordset[0].TableCount} tables and ${seatCount.recordset[0].SeatCount} seats`
+    );
+
+    const query = `
+      SELECT 
+        t.TableID,
+        t.FloorNo,
+        t.Code as TableCode,
+        t.Name as TableName,
+        t.Capacity,
+        t.Remarks as TableRemarks,
+        t.Status as TableStatus,
+        s.SeatId, 
+        s.TableId as SeatTableId,
+        s.Seat AS SeatName,
+        s.remarks as SeatRemarks, 
+        s.Status AS SeatStatus
+      FROM 
+        tblTable t
+      LEFT JOIN 
+        tblSeat s ON t.TableID = s.TableId
+      WHERE 
+        t.Status IS NOT NULL  -- Ensure we only get valid tables
+      ORDER BY 
+        t.TableID, s.SeatId
+    `;
+
+    const result = await connectedPool.request().query(query);
+
+    if (!result.recordset || result.recordset.length === 0) {
+      console.warn("No data found in table/seat query");
+      return [];
+    }
+
+    const tables = [];
+    const tableMap = new Map();
+
+    result.recordset.forEach((row, index) => {
+      try {
+        // Create table if it doesn't exist
+        if (!tableMap.has(row.TableID)) {
+          const tableData = {
+            TableID: row.TableID,
+            FloorNo: row.FloorNo || 0,
+            Code: row.TableCode || `T-${row.TableID}`,
+            Name: row.TableName || `Table ${row.TableID}`,
+            Capacity: row.Capacity || 0,
+            Remarks: row.TableRemarks || "",
+            Status: row.TableStatus,
+            seats: [],
+            CreatedAt: new Date().toISOString(),
+          };
+
+          tables.push(tableData);
+          tableMap.set(row.TableID, tableData);
+        }
+
+        // Add seat if it exists and has valid data
+        if (row.SeatId && row.SeatTableId === row.TableID) {
+          const seat = {
+            SeatId: row.SeatId,
+            TableId: row.SeatTableId,
+            SeatName: row.SeatName || `Seat ${row.SeatId}`,
+            Remarks: row.SeatRemarks || "",
+            Status: row.SeatStatus !== null ? row.SeatStatus : 0,
+          };
+
+          tableMap.get(row.TableID).seats.push(seat);
+        }
+      } catch (rowError) {
+        console.error(`Error processing row ${index}:`, rowError.message, row);
+      }
+    });
+
+    // Add computed properties
+    tables.forEach((table) => {
+      table.TotalSeats = table.seats.length;
+      table.AvailableSeats = table.seats.filter(
+        (seat) => seat.Status === 0
+      ).length;
+      table.OccupiedSeats = table.seats.filter(
+        (seat) => seat.Status === 1
+      ).length;
+      table.IsFullyOccupied =
+        table.seats.length > 0 && table.AvailableSeats === 0;
+      table.IsEmpty = table.AvailableSeats === table.seats.length;
+    });
+
+    console.log(`Successfully processed ${tables.length} tables with seats`);
+    return tables;
+  } catch (error) {
+    console.error("Error in getTableSeatsDataWithValidation:", error.message);
     throw createAppError(`Error fetching table seats: ${error.message}`, 500);
   }
 };
@@ -335,7 +468,10 @@ const processOrder = async ({
     const handleCustomerManagement = async () => {
       if (["NEW", "UPDATED", "KOT"].includes(status) && custName && contact) {
         // Normalize contact and phone fields
-        const normalizedContact = contact.replace(/\D/g, '').padStart(10, '0').slice(-10);
+        const normalizedContact = contact
+          .replace(/\D/g, "")
+          .padStart(10, "0")
+          .slice(-10);
         console.log("Normalized contact for check:", normalizedContact);
 
         // Check for existing customer with exact match on CustName and ContactNo/Phone
@@ -375,7 +511,10 @@ const processOrder = async ({
             updateFields.push("ContactNo = @ContactNo");
             updateParams.input("ContactNo", sql.VarChar, normalizedContact);
           }
-          if (existingCustomer.Phone !== normalizedContact && !existingCustomer.Phone) {
+          if (
+            existingCustomer.Phone !== normalizedContact &&
+            !existingCustomer.Phone
+          ) {
             updateFields.push("Phone = @Phone");
             updateParams.input("Phone", sql.VarChar, normalizedContact);
           }
@@ -395,7 +534,10 @@ const processOrder = async ({
           }
         } else {
           // Create new customer
-          console.log("Creating new customer with:", { custName, normalizedContact });
+          console.log("Creating new customer with:", {
+            custName,
+            normalizedContact,
+          });
           const newCustomerQuery = `
             INSERT INTO dbo.tblCustomer (
               CustName, Add1, ContactNo, Phone, Fax, Email, ShowLast, OpBal, TopayCollect,
@@ -421,7 +563,11 @@ const processOrder = async ({
           console.log("New customer created with ID:", finalCustId);
         }
       } else {
-        console.log("Skipping customer management or insufficient data:", { status, custName, contact });
+        console.log("Skipping customer management or insufficient data:", {
+          status,
+          custName,
+          contact,
+        });
         finalCustId = custId || 0;
       }
     };
@@ -497,9 +643,7 @@ const processOrder = async ({
         const vatAmt = parseFloat(item.vatAmt) || 0;
         const taxLedger = parseInt(item.taxLedger) || 0;
 
-        console.log(
-          `Processing item: ${item.itemName}, ItemCode: ${itemCode}`
-        );
+        console.log(`Processing item: ${item.itemName}, ItemCode: ${itemCode}`);
 
         const orderDetailQuery = `
           INSERT INTO tblOrder_D (OrderNo, SlNo, ItemCode, ItemName, Qty, Rate, Amount, Cost, Vat, VatAmt, TaxLedger, Arabic, Notes)
@@ -1181,9 +1325,6 @@ const processOrder = async ({
     );
   }
 };
-
-
-
 
 const latestOrder = async () => {
   let transaction;
