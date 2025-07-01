@@ -1,30 +1,49 @@
 @echo off
-title POS Backend Status Checker
+title POS Backend Status Checker v2.1
 color 0A
 
+:: Check if running in MINGW64 and warn user
+if defined MSYSTEM (
+    echo ====================================
+    echo  WARNING: MINGW64 DETECTED
+    echo ====================================
+    echo.
+    echo This script works best in Windows Command Prompt.
+    echo For best results, please:
+    echo 1. Press Win+R
+    echo 2. Type: cmd
+    echo 3. Navigate to: %cd%
+    echo 4. Run: check_status.bat
+    echo.
+    echo Press any key to continue anyway, or Ctrl+C to exit...
+    pause
+    echo.
+)
+
 echo ====================================
-echo  POS Backend Status Monitor
+echo  POS Backend Status Monitor v2.1
 echo ====================================
 echo.
 
 :menu
 echo 1. Check if POS Backend is Running
-echo 2. Test API Connection
+echo 2. Test API Connection  
 echo 3. View Live Logs
 echo 4. Show Task Manager Processes
 echo 5. Check Startup Task Status
-echo 6. Check Port Usage
+echo 6. Check Port Usage (4444)
 echo 7. Start POS Backend (if not running)
-echo 8. Stop POS Backend
+echo 8. Stop POS Backend (Enhanced)
 echo 9. EMERGENCY STOP - Kill All Related Processes
-echo 10. Refresh Status
+echo 10. Fix Installation Issues
+echo 11. Refresh Status
 echo 0. Exit
 echo.
-set /p choice="Enter your choice (0-10): "
+set /p choice="Enter your choice (0-11): "
 echo.
 
 if "%choice%"=="1" goto check_process
-if "%choice%"=="2" goto test_api
+if "%choice%"=="2" goto test_api  
 if "%choice%"=="3" goto view_logs
 if "%choice%"=="4" goto task_manager
 if "%choice%"=="5" goto check_task
@@ -32,7 +51,8 @@ if "%choice%"=="6" goto check_port
 if "%choice%"=="7" goto start_service
 if "%choice%"=="8" goto stop_service
 if "%choice%"=="9" goto emergency_stop
-if "%choice%"=="10" goto refresh
+if "%choice%"=="10" goto fix_installation
+if "%choice%"=="11" goto refresh
 if "%choice%"=="0" goto exit
 goto menu
 
@@ -44,27 +64,30 @@ echo.
 echo Checking for POS Backend processes...
 echo.
 
-tasklist /fi "imagename eq pos_backend.exe" /fo table 2>nul | find /i "pos_backend.exe" >nul
+:: Use Windows-compatible process checking
+tasklist 2>nul | findstr /i "pos_backend.exe" >nul 2>&1
 if %errorLevel% == 0 (
     echo [OK] POS Backend EXE is RUNNING
-    tasklist /fi "imagename eq pos_backend.exe" /fo table
+    tasklist | findstr /i "pos_backend.exe"
 ) else (
     echo [X] POS Backend EXE is NOT RUNNING
 )
 echo.
 
-tasklist /fi "imagename eq wscript.exe" /fo table 2>nul | find /i "wscript.exe" >nul
+tasklist 2>nul | findstr /i "wscript.exe" >nul 2>&1
 if %errorLevel% == 0 (
     echo [OK] Background Script (wscript.exe) is RUNNING
-    tasklist /fi "imagename eq wscript.exe" /fo table | findstr /v "Image Name"
+    tasklist | findstr /i "wscript.exe"
 ) else (
     echo [X] Background Script is NOT RUNNING
 )
 echo.
 
-tasklist /fi "imagename eq cmd.exe" /fo table 2>nul | find /i "service_wrapper" >nul
+:: Check for service wrapper
+wmic process where "commandline like '%%service_wrapper%%'" get processid,commandline 2>nul | findstr "service_wrapper" >nul 2>&1
 if %errorLevel% == 0 (
     echo [OK] Service Wrapper is RUNNING
+    wmic process where "commandline like '%%service_wrapper%%'" get processid,commandline 2>nul
 ) else (
     echo [X] Service Wrapper is NOT RUNNING
 )
@@ -81,11 +104,23 @@ echo Testing API endpoints...
 echo.
 
 echo Testing: http://localhost:4444/health
-powershell -Command "try { $response = Invoke-WebRequest -Uri 'http://localhost:4444/health' -TimeoutSec 5; Write-Host '[✓] API Health Check: SUCCESS'; Write-Host 'Response:' $response.Content } catch { Write-Host '[✗] API Health Check: FAILED'; Write-Host 'Error:' $_.Exception.Message }"
+curl -s -w "HTTP Status: %%{http_code}\n" http://localhost:4444/health --connect-timeout 5 --max-time 10 2>nul
+if %errorLevel% == 0 (
+    echo [✓] API Health Check: SUCCESS
+) else (
+    echo [✗] API Health Check: FAILED
+    echo Trying with PowerShell...
+    powershell -Command "try { $response = Invoke-WebRequest -Uri 'http://localhost:4444/health' -TimeoutSec 5; Write-Host '[✓] API Health Check: SUCCESS'; Write-Host 'Response:' $response.Content } catch { Write-Host '[✗] API Health Check: FAILED'; Write-Host 'Error:' $_.Exception.Message }" 2>nul
+)
 echo.
 
 echo Testing: http://localhost:4444/api/
-powershell -Command "try { $response = Invoke-WebRequest -Uri 'http://localhost:4444/api/' -TimeoutSec 5; Write-Host '[✓] API Root: SUCCESS' } catch { Write-Host '[✗] API Root: FAILED'; Write-Host 'Error:' $_.Exception.Message }"
+curl -s -w "HTTP Status: %%{http_code}\n" http://localhost:4444/api/ --connect-timeout 5 --max-time 10 2>nul
+if %errorLevel% == 0 (
+    echo [✓] API Root: SUCCESS
+) else (
+    echo [✗] API Root: FAILED - This might be normal if endpoint doesn't exist
+)
 echo.
 pause
 goto menu
@@ -101,7 +136,7 @@ echo.
 if exist "C:\POS_Backend\service.log" (
     echo [✓] Service log found - Showing last 20 lines:
     echo ----------------------------------------
-    powershell -Command "Get-Content 'C:\POS_Backend\service.log' -Tail 20"
+    powershell -Command "Get-Content 'C:\POS_Backend\service.log' -Tail 20 -ErrorAction SilentlyContinue" 2>nul
     echo ----------------------------------------
 ) else (
     echo [✗] No service.log found
@@ -111,14 +146,24 @@ echo.
 if exist "C:\POS_Backend\service_error.log" (
     echo [✓] Error log found - Showing last 10 lines:
     echo ----------------------------------------
-    powershell -Command "Get-Content 'C:\POS_Backend\service_error.log' -Tail 10"
+    powershell -Command "Get-Content 'C:\POS_Backend\service_error.log' -Tail 10 -ErrorAction SilentlyContinue" 2>nul
     echo ----------------------------------------
 ) else (
     echo [✗] No service_error.log found
 )
 echo.
 
-echo Press any key to continue, or Ctrl+C to exit...
+:: Check for any other log files
+echo Checking for other log files...
+if exist "C:\POS_Backend\*.log" (
+    echo Found log files:
+    dir "C:\POS_Backend\*.log" /b 2>nul
+) else (
+    echo No log files found in C:\POS_Backend\
+)
+echo.
+
+echo Press any key to continue...
 pause
 goto menu
 
@@ -129,29 +174,43 @@ echo ====================================
 echo.
 echo All POS Backend related processes:
 echo.
-tasklist /fi "imagename eq pos_backend.exe" /fo table /v 2>nul
+
+echo POS Backend executable processes:
+tasklist | findstr /i "pos_backend" 2>nul
+if %errorLevel% neq 0 echo No pos_backend.exe processes found
 echo.
-tasklist /fi "imagename eq wscript.exe" /fo table /v 2>nul
+
+echo Background script processes:
+tasklist | findstr /i "wscript" 2>nul
+if %errorLevel% neq 0 echo No wscript.exe processes found
 echo.
-tasklist /fi "imagename eq cmd.exe" /fo table /v 2>nul | findstr /i "service_wrapper"
+
+echo Service wrapper processes:
+wmic process where "commandline like '%%service_wrapper%%'" get processid,parentprocessid,commandline 2>nul
 echo.
+
+echo Processes using port 4444:
+netstat -ano | findstr :4444 2>nul
+if %errorLevel% neq 0 echo No processes using port 4444
+echo.
+
 pause
 goto menu
 
 :check_task
 echo ====================================
-echo  STARTUP TASK STATUS
+echo  STARTUP TASK STATUS  
 echo ====================================
 echo.
 echo Checking Windows Scheduled Task...
 echo.
 
-schtasks /query /tn "POS Backend Startup" /fo table 2>nul
+schtasks /query /tn "POS Backend Startup" 2>nul >nul
 if %errorLevel% == 0 (
     echo [✓] Startup task EXISTS and is configured
     echo.
     echo Task Details:
-    schtasks /query /tn "POS Backend Startup" /fo list /v 2>nul
+    schtasks /query /tn "POS Backend Startup" /fo list 2>nul
 ) else (
     echo [✗] Startup task NOT FOUND
     echo.
@@ -164,25 +223,34 @@ goto menu
 
 :check_port
 echo ====================================
-echo  PORT USAGE CHECK
+echo  PORT USAGE CHECK (Port 4444)
 echo ====================================
 echo.
 echo Checking if port 4444 is in use...
 echo.
 
-netstat -an | findstr :4444
+netstat -an | findstr :4444 2>nul
 if %errorLevel% == 0 (
     echo [✓] Port 4444 is ACTIVE - Something is listening
     echo.
     echo Detailed port information:
-    netstat -ano | findstr :4444
+    netstat -ano | findstr :4444 2>nul
     echo.
     echo Process using port 4444:
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :4444') do (
-        tasklist /fi "pid eq %%a" /fo table 2>nul
+    for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr :4444') do (
+        if "%%a" neq "" (
+            echo PID: %%a
+            tasklist | findstr "%%a" 2>nul
+        )
     )
 ) else (
     echo [✗] Port 4444 is NOT in use - POS Backend may not be running
+    echo.
+    echo Other common ports check:
+    echo Port 3000: 
+    netstat -an | findstr :3000 2>nul
+    echo Port 8080:
+    netstat -an | findstr :8080 2>nul
 )
 echo.
 pause
@@ -194,10 +262,10 @@ echo  STARTING POS BACKEND
 echo ====================================
 echo.
 echo Checking if already running...
-tasklist /fi "imagename eq pos_backend.exe" /fo table 2>nul | find /i "pos_backend.exe" >nul
-if %errorLevel% == 0 (
+tasklist | findstr /i "pos_backend.exe" >nul 2>&1
+if %errorLevel__ == 0 (
     echo [!] POS Backend is already running!
-    tasklist /fi "imagename eq pos_backend.exe" /fo table
+    tasklist | findstr /i "pos_backend.exe"
     echo.
     echo If you want to restart, use option 8 to stop first.
 ) else (
@@ -206,23 +274,37 @@ if %errorLevel% == 0 (
     
     if exist "C:\POS_Backend\run_silent.vbs" (
         echo Starting via silent VBS script...
-        cscript //nologo "C:\POS_Backend\run_silent.vbs"
+        cscript //nologo "C:\POS_Backend\run_silent.vbs" 2>nul
         echo.
         echo Waiting 5 seconds for startup...
-        timeout /t 5 /nobreak >nul
+        ping 127.0.0.1 -n 6 >nul 2>&1
         echo.
         echo Checking if started successfully...
-        tasklist /fi "imagename eq pos_backend.exe" /fo table 2>nul | find /i "pos_backend.exe" >nul
-        if %errorLevel% == 0 (
+        tasklist | findstr /i "pos_backend.exe" >nul 2>&1
+        if %errorLevel__ == 0 (
             echo [✓] POS Backend started successfully!
-            tasklist /fi "imagename eq pos_backend.exe" /fo table
+            tasklist | findstr /i "pos_backend.exe"
         ) else (
             echo [✗] Failed to start POS Backend
             echo Check C:\POS_Backend\ for error logs
+            echo.
+            echo Alternative startup methods:
+            echo 1. Try running: C:\POS_Backend\start_background.bat
+            echo 2. Try manual start: C:\POS_Backend\pos_backend.exe
         )
     ) else (
         echo [✗] Silent runner script not found
-        echo Please run the installer first
+        echo.
+        echo Trying direct executable...
+        if exist "C:\POS_Backend\pos_backend.exe" (
+            echo Starting POS Backend directly...
+            start "" "C:\POS_Backend\pos_backend.exe"
+            ping 127.0.0.1 -n 3 >nul 2>&1
+            echo Check if started successfully...
+        ) else (
+            echo [✗] POS Backend executable not found in C:\POS_Backend\
+            echo Please run the installer first
+        )
     )
 )
 echo.
@@ -237,58 +319,33 @@ echo.
 echo Starting comprehensive shutdown process...
 echo.
 
-REM Step 1: Display current processes
 echo Step 1: Current POS Backend processes:
 echo ----------------------------------------
-tasklist | findstr /i "pos_backend wscript cmd" 2>nul
-if %errorLevel% neq 0 (
+tasklist | findstr /i "pos_backend\|wscript" 2>nul
+if %errorLevel__ neq 0 (
     echo [!] No POS Backend processes found running
-    echo.
     goto stop_cleanup
 )
 echo.
 
-REM Step 2: Stop scheduled task first
 echo Step 2: Stopping scheduled task...
 schtasks /end /tn "POS Backend Startup" 2>nul >nul
-if %errorLevel% == 0 (
-    echo [OK] Startup task stopped
-) else (
-    echo [!] No startup task found or already stopped
-)
+echo Task stop attempted
 echo.
 
-REM Step 3: Graceful shutdown attempt
-echo Step 3: Attempting graceful shutdown...
-taskkill /im pos_backend.exe 2>nul
+echo Step 3: Graceful shutdown attempt...
+taskkill /im pos_backend.exe 2>nul >nul
 if %errorLevel__ == 0 (
-    echo [OK] Graceful shutdown signal sent to pos_backend.exe
-    timeout /t 3 /nobreak >nul
+    echo [OK] Graceful shutdown signal sent
+    ping 127.0.0.1 -n 4 >nul 2>&1
 ) else (
     echo [!] No pos_backend.exe process found for graceful shutdown
 )
 
-REM Step 4: Check and force kill main process
-echo Step 4: Checking main process status...
-tasklist /fi "imagename eq pos_backend.exe" /fo table 2>nul | find /i "pos_backend.exe" >nul
-if %errorLevel% == 0 (
+echo Step 4: Force termination if needed...
+tasklist | findstr /i "pos_backend.exe" >nul 2>&1
+if %errorLevel__ == 0 (
     echo [!] Process still running, using force termination...
-    
-    REM Get all PIDs for pos_backend.exe
-    for /f "tokens=2" %%a in ('tasklist /fi "imagename eq pos_backend.exe" /fo csv /nh 2^>nul ^| findstr pos_backend') do (
-        set "pid=%%~a"
-        if defined pid (
-            echo Terminating PID: !pid!
-            taskkill /f /pid !pid! /t 2>nul
-            if !errorLevel! == 0 (
-                echo [OK] Successfully terminated PID !pid!
-            ) else (
-                echo [X] Failed to terminate PID !pid!
-            )
-        )
-    )
-    
-    REM Backup force kill by image name
     taskkill /f /im pos_backend.exe /t 2>nul
     echo [OK] Force kill command executed
 ) else (
@@ -296,110 +353,42 @@ if %errorLevel% == 0 (
 )
 echo.
 
-REM Step 5: Stop background scripts
 echo Step 5: Stopping background scripts...
-tasklist /fi "imagename eq wscript.exe" /fo table 2>nul | find /i "wscript.exe" >nul
-if %errorLevel% == 0 (
-    echo [!] Found wscript.exe processes, terminating...
-    taskkill /f /im wscript.exe /t 2>nul
-    if %errorLevel% == 0 (
-        echo [OK] Background scripts terminated
-    ) else (
-        echo [X] Failed to terminate some background scripts
+tasklist | findstr /i "wscript.exe" >nul 2>&1
+if %errorLevel__ == 0 (
+    echo [!] Found wscript.exe processes, checking if related...
+    wmic process where "commandline like '%%POS_Backend%%' or commandline like '%%run_silent%%'" get processid 2>nul | findstr /v "ProcessId" > temp_pids.txt 2>nul
+    for /f %%a in (temp_pids.txt) do (
+        if "%%a" neq "" (
+            echo Terminating related wscript PID: %%a
+            taskkill /f /pid %%a 2>nul >nul
+        )
     )
+    del temp_pids.txt 2>nul
+    echo [OK] Related background scripts terminated
 ) else (
     echo [OK] No background scripts found
 )
 echo.
 
-REM Step 6: Stop service wrapper processes
-echo Step 6: Stopping service wrapper processes...
-set "wrapper_found=0"
-for /f "tokens=2,9" %%a in ('tasklist /fi "imagename eq cmd.exe" /fo csv /nh 2^>nul') do (
-    echo %%b | findstr /i "service_wrapper" >nul 2>&1
-    if !errorLevel! == 0 (
-        set "wrapper_found=1"
-        set "pid=%%~a"
-        echo Terminating service wrapper PID: !pid!
-        taskkill /f /pid !pid! /t 2>nul
-        if !errorLevel! == 0 (
-            echo [OK] Service wrapper PID !pid! terminated
-        ) else (
-            echo [X] Failed to terminate service wrapper PID !pid!
-        )
-    )
-)
-if "%wrapper_found%"=="0" (
-    echo [OK] No service wrapper processes found
-)
-echo.
-
-REM Step 7: Check port usage and kill process using port 4444
-echo Step 7: Checking port 4444 usage...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :4444 ^| findstr LISTENING') do (
-    set "port_pid=%%a"
-    if defined port_pid (
-        echo [!] Process using port 4444 (PID: !port_pid!)
-        taslist /fi "pid eq !port_pid!" /fo table 2>nul
-        echo Terminating process using port 4444...
-        taskkill /f /pid !port_pid! 2>nul
-        if !errorLevel! == 0 (
-            echo [OK] Process using port 4444 terminated
-        ) else (
-            echo [X] Failed to terminate process using port 4444
-        )
-    )
-)
-echo.
-
 :stop_cleanup
-REM Step 8: Final verification
-echo Step 8: Final verification and cleanup...
-echo ========================================
-timeout /t 2 /nobreak >nul
+echo Step 6: Final verification...
+ping 127.0.0.1 -n 3 >nul 2>&1
 
-echo Checking remaining processes...
-set "remaining_processes=0"
-
-tasklist /fi "imagename eq pos_backend.exe" /fo table 2>nul | find /i "pos_backend.exe" >nul
-if %errorLevel% == 0 (
-    echo [X] WARNING: pos_backend.exe still running
-    tasklist /fi "imagename eq pos_backend.exe" /fo table
-    set "remaining_processes=1"
-)
-
-tasklist /fi "imagename eq wscript.exe" /fo table 2>nul | find /i "wscript.exe" >nul
-if %errorLevel% == 0 (
-    echo [!] WARNING: wscript.exe still running (may be unrelated)
-    set "remaining_processes=1"
-)
-
-netstat -an | findstr :4444 >nul 2>&1
-if %errorLevel% == 0 (
-    echo [X] WARNING: Port 4444 still in use
-    netstat -ano | findstr :4444
-    set "remaining_processes=1"
-)
-
-if "%remaining_processes%"=="1" (
-    echo.
-    echo ====================================
-    echo  TROUBLESHOOTING RECOMMENDATIONS
-    echo ====================================
-    echo 1. Try running this script as Administrator
-    echo 2. Use option 9 for EMERGENCY STOP
-    echo 3. Manually check Task Manager
-    echo 4. Restart computer if necessary
-    echo 5. Check if any files are locked in C:\POS_Backend\
-) else (
-    echo.
-    echo ====================================
-    echo  SUCCESS - ALL PROCESSES STOPPED
-    echo ====================================
+tasklist | findstr /i "pos_backend.exe" >nul 2>&1
+if %errorLevel__ neq 0 (
     echo [✓] POS Backend completely terminated
-    echo [✓] All related processes stopped
-    echo [✓] Port 4444 released
-    echo [✓] System is clean
+    
+    netstat -an | findstr :4444 >nul 2>&1
+    if %errorLevel__ neq 0 (
+        echo [✓] Port 4444 released
+        echo [✓] System is clean
+    ) else (
+        echo [!] Port 4444 still in use by another process
+    )
+) else (
+    echo [X] WARNING: Some POS Backend processes still running
+    tasklist | findstr /i "pos_backend"
 )
 
 echo.
@@ -412,7 +401,6 @@ echo  EMERGENCY STOP - NUCLEAR OPTION
 echo ====================================
 echo.
 echo [WARNING] This will forcefully terminate ALL related processes
-echo [WARNING] This may affect other applications using similar processes
 echo.
 set /p confirm="Are you sure? Type YES to continue: "
 if /i not "%confirm%"=="YES" (
@@ -424,58 +412,91 @@ echo.
 echo Executing emergency stop procedures...
 echo.
 
-REM Kill all possible related processes
-echo Terminating all pos_backend processes...
-taskkill /f /im pos_backend.exe /t 2>nul
-taskkill /f /im wscript.exe /t 2>nul
-taskkill /f /im node.exe /t 2>nul
-taskkill /f /im python.exe /t 2>nul
+taskkill /f /im pos_backend.exe /t 2>nul >nul
+taskkill /f /im wscript.exe /t 2>nul >nul
+taskkill /f /im node.exe /t 2>nul >nul
 
-REM Kill processes using port 4444
 echo Terminating processes using port 4444...
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr :4444') do (
-    taskkill /f /pid %%a 2>nul >nul
-)
-
-REM Stop all scheduled tasks that might be related
-echo Stopping scheduled tasks...
-schtasks /end /tn "POS Backend Startup" 2>nul >nul
-schtasks /end /tn "POS Backend Service" 2>nul >nul
-
-REM Kill any remaining CMD processes that might be service wrappers
-echo Checking for service wrapper processes...
-for /f "tokens=2,9" %%a in ('tasklist /fi "imagename eq cmd.exe" /fo csv /nh 2^>nul') do (
-    echo %%b | findstr /i "service\|wrapper\|pos\|backend" >nul 2>&1
-    if !errorLevel! == 0 (
-        taskkill /f /pid %%~a 2>nul >nul
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr :4444') do (
+    if "%%a" neq "" (
+        taskkill /f /pid %%a 2>nul >nul
     )
 )
+
+schtasks /end /tn "POS Backend Startup" 2>nul >nul
 
 echo.
 echo Emergency stop completed!
 echo.
-echo Final verification:
-timeout /t 3 /nobreak >nul
+ping 127.0.0.1 -n 4 >nul 2>&1
 
+echo Final verification:
 tasklist | findstr /i "pos_backend" 2>nul
-if %errorLevel% neq 0 (
+if %errorLevel__ neq 0 (
     echo [✓] No pos_backend processes found
 ) else (
-    echo [!] Some processes may still exist:
-    tasklist | findstr /i "pos_backend"
+    echo [!] Some processes may still exist
 )
 
 netstat -an | findstr :4444 >nul 2>&1
-if %errorLevel% neq 0 (
+if %errorLevel__ neq 0 (
     echo [✓] Port 4444 is free
 ) else (
-    echo [!] Port 4444 still in use:
-    netstat -ano | findstr :4444
+    echo [!] Port 4444 still in use
 )
 
 echo.
-echo Emergency stop procedure completed.
-echo If processes still remain, try restarting your computer.
+pause
+goto menu
+
+:fix_installation
+echo ====================================
+echo  FIX INSTALLATION ISSUES
+echo ====================================
+echo.
+echo This will help fix common installation problems...
+echo.
+
+echo 1. Checking for file locks...
+echo Stopping all processes first...
+taskkill /f /im pos_backend.exe 2>nul >nul
+ping 127.0.0.1 -n 3 >nul 2>&1
+
+echo.
+echo 2. Checking installation directory...
+if exist "C:\POS_Backend\" (
+    echo [✓] Installation directory exists
+    dir "C:\POS_Backend\" /b
+) else (
+    echo [X] Installation directory missing - run install.bat first
+)
+
+echo.
+echo 3. Checking for executable in dist...
+if exist "dist\pos_backend.exe" (
+    echo [✓] Found pos_backend.exe in dist folder
+    echo File size: 
+    dir "dist\pos_backend.exe" | findstr pos_backend
+) else (
+    echo [X] pos_backend.exe not found in dist folder
+    echo You need to build it first:
+    echo   1. node build.js
+    echo   2. pkg . --target node18-win-x64 --output dist/pos_backend.exe
+)
+
+echo.
+echo 4. Trying to fix installation...
+if exist "dist\pos_backend.exe" (
+    echo Copying executable to installation directory...
+    copy "dist\pos_backend.exe" "C:\POS_Backend\" 2>nul
+    if %errorLevel__ == 0 (
+        echo [✓] Successfully copied executable
+    ) else (
+        echo [X] Failed to copy - file may be in use
+        echo Try running this script as Administrator
+    )
+)
+
 echo.
 pause
 goto menu
@@ -483,16 +504,11 @@ goto menu
 :refresh
 cls
 echo Refreshing status...
-timeout /t 1 /nobreak >nul
+ping 127.0.0.1 -n 2 >nul 2>&1
 goto menu
 
 :exit
 echo.
-echo Thank you for using POS Backend Status Checker
+echo Thank you for using POS Backend Status Checker v2.1
 echo.
-exit
-
-:error
-echo An error occurred. Please try again.
-pause
-goto menu
+exit /b 0
