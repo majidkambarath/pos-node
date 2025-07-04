@@ -151,6 +151,7 @@ const saveOrder = async (req, res, next) => {
       items,
       holdedOrder,
     } = req.body;
+    console.log(req.body)
     if (!orderNo || orderNo === "0") {
       return res.status(400).json({
         success: false,
@@ -221,7 +222,7 @@ const saveOrder = async (req, res, next) => {
 const authLogin = async (req, res, next) => {
   try {
     const { username, password } = req.body;
-
+console.log(req.body)
     if (!username || !password) {
       return next(createAppError("Username and password are required", 400));
     }
